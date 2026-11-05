@@ -1232,22 +1232,28 @@ $('lpass').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault()
 $('lemail').addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();$('lpass').focus()}});
 
 /* ============================ CAMERA / BARCODE ============================ */
-/* Unified scanner: native BarcodeDetector where reliable, ZXing fallback everywhere. */
-let scanStop=null,zxingLoadPromise=null,zxingReader=null;
+/* SCANNER:BEGIN
+   Design (feature-based, no user-agent branching):
+   - The app opens exactly ONE camera stream and owns it from open to close.
+   - The same stream feeds exactly ONE decode loop at a time: the native
+     BarcodeDetector (only if it supports every required format) or ZXing's core
+     MultiFormatReader. ZXing's own video/camera helpers are never used, so
+     they cannot reset, replace or compete for the stream.
+   - Decoding starts only after the video has frames and non-zero dimensions.
+   - Every canvas draw uses a validated, in-bounds source rectangle and a
+     non-zero canvas size. */
+const SCAN_FORMATS=['qr_code','ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf'];
+let scanStop=null,zxingLoadPromise=null;
 
 function stopStream(){
  if(stream){try{stream.getTracks().forEach(t=>t.stop())}catch(e){}stream=null}
- try{const v=$('video');v.pause();v.srcObject=null}catch(e){}
+ try{const v=$('video');v.pause();v.removeAttribute('src');v.srcObject=null}catch(e){}
 }
 function closeCamera(){
  camToken++;
  if(scanStop){try{scanStop()}catch(e){}scanStop=null}
- if(zxingReader){try{zxingReader.reset()}catch(e){}zxingReader=null}
  stopStream();
  $('cameraBox').style.display='none';
-}
-function isAppleMobileBrowser(){
- return /iPhone|iPad|iPod/i.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
 }
 function acceptScannedCode(code){
  const target=scanTarget;
@@ -1284,99 +1290,42 @@ function loadZXing(){
  return zxingLoadPromise;
 }
 
-/* ZXing camera decoder. Let ZXing own the iOS camera stream.
-   Its continuous-video method resets its reader and attaches its own stream;
-   therefore it must NOT receive a video element whose stream was opened here. */
-async function startZXing(token){
- const status=$('cameraStatus');
- status.textContent='Loading scanner library…';
- const ZX=await loadZXing();
- if(token!==camToken)return;
- const hints=new Map();
- hints.set(ZX.DecodeHintType.TRY_HARDER,true);
- hints.set(ZX.DecodeHintType.POSSIBLE_FORMATS,[
-  ZX.BarcodeFormat.EAN_13,ZX.BarcodeFormat.EAN_8,ZX.BarcodeFormat.UPC_A,
-  ZX.BarcodeFormat.UPC_E,ZX.BarcodeFormat.CODE_128,ZX.BarcodeFormat.CODE_39,
-  ZX.BarcodeFormat.ITF,ZX.BarcodeFormat.QR_CODE
- ]);
- const reader=new ZX.BrowserMultiFormatReader(hints,250);
- zxingReader=reader;
- const video=$('video');
- video.setAttribute('playsinline','');
- video.setAttribute('webkit-playsinline','');
- video.setAttribute('autoplay','');
- video.setAttribute('muted','');
- video.playsInline=true;video.webkitPlaysInline=true;
- video.muted=true;video.autoplay=true;video.controls=false;
- let stopped=false;
- const isNormalMiss=e=>{
-  const n=String(e&&e.name||'');
-  return n==='NotFoundException'||n==='ChecksumException'||n==='FormatException';
- };
- const onDecode=(result,error)=>{
-  if(stopped||token!==camToken)return;
-  if(result){
-   const code=result.getText&&result.getText();
-   if(code){acceptScannedCode(code);return}
-  }
-  if(error&&!isNormalMiss(error)){
-   status.textContent='Scanner is retrying…';
-   console.warn('ZXing scan attempt:',error);
-  }
- };
- scanStop=()=>{
-  stopped=true;
-  try{reader.reset()}catch(e){}
- };
- status.textContent='Scanning… QR code ya barcode ko camera ke samne seedha rakhein.';
- try{
-  // ZXing obtains the environment camera itself and binds it to this preview.
-  await reader.decodeFromVideoDevice(undefined,video,(result,error)=>onDecode(result,error));
- }finally{
-  // If the user closed the scanner while the permission prompt was open,
-  // release any stream that became available after the close action.
-  if(stopped||token!==camToken){try{reader.reset()}catch(e){}}
- }
+/* Copy a validated region of the video into the canvas.
+   crop: null for the whole frame, or a 0-1 fraction for a centred region.
+   Returns the canvas, or null when the video has no usable frame yet. */
+function grabFrame(video,canvas,ctx,maxWidth,crop){
+ const vw=video.videoWidth|0,vh=video.videoHeight|0;
+ if(vw<2||vh<2)return null;
+ let sw=vw,sh=vh;
+ if(crop&&crop>0&&crop<1){sw=Math.floor(vw*crop);sh=Math.floor(vh*crop)}
+ sw=Math.max(1,Math.min(sw,vw));sh=Math.max(1,Math.min(sh,vh));
+ const sx=Math.max(0,Math.min(Math.floor((vw-sw)/2),vw-sw));
+ const sy=Math.max(0,Math.min(Math.floor((vh-sh)/2),vh-sh));
+ const scale=Math.min(1,maxWidth/sw);
+ const dw=Math.max(1,Math.floor(sw*scale)),dh=Math.max(1,Math.floor(sh*scale));
+ if(canvas.width!==dw)canvas.width=dw;
+ if(canvas.height!==dh)canvas.height=dh;
+ if(!(canvas.width>0&&canvas.height>0))return null;
+ ctx.drawImage(video,sx,sy,sw,sh,0,0,dw,dh);
+ return canvas;
 }
 
-/* Native BarcodeDetector is used only when available and supported. */
-function startNativeScanner(token){
- let detector;
- try{
-  detector=new BarcodeDetector({formats:['ean_13','ean_8','upc_a','upc_e','code_128','code_39','itf','qr_code']});
- }catch(e){return false}
- const video=$('video');
- let stopped=false,timer=null,failures=0,busy=false;
- scanStop=()=>{stopped=true;clearTimeout(timer)};
- $('cameraStatus').textContent='Point the camera at a barcode or QR code…';
- const loop=async()=>{
-  if(stopped||token!==camToken||!stream)return;
-  if(!busy){
-   busy=true;
-   try{
-    const codes=await detector.detect(video);
-    if(stopped||token!==camToken)return;
-    failures=0;
-    if(codes&&codes.length&&codes[0].rawValue){acceptScannedCode(String(codes[0].rawValue));return}
-   }catch(e){
-    failures++;
-    if(failures>=8){
-     stopped=true;clearTimeout(timer);scanStop=null;
-     stopStream();
-     startZXing(token).catch(err=>{if(token===camToken)$('cameraStatus').textContent=err&&err.message||'Scanner failed'});
-     return;
-    }
-   }finally{busy=false}
-  }
-  if(!stopped&&token===camToken&&stream)timer=setTimeout(loop,160);
- };
- loop();
- return true;
+function waitForVideoFrames(video,token,timeoutMs){
+ return new Promise((resolve,reject)=>{
+  const t0=Date.now();
+  const check=()=>{
+   if(token!==camToken)return reject(Object.assign(Error('cancelled'),{cancelled:true}));
+   if(video.readyState>=2&&video.videoWidth>0&&video.videoHeight>0)return resolve();
+   if(Date.now()-t0>timeoutMs)return reject(Error('Camera started but no video frames arrived. Close other camera apps and retry.'));
+   setTimeout(check,100);
+  };
+  check();
+ });
 }
 
 async function getCameraStream(){
  const constraints=[
-  {audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}}},
+  {audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}}},
   {audio:false,video:{facingMode:{ideal:'environment'}}},
   {audio:false,video:true}
  ];
@@ -1386,6 +1335,201 @@ async function getCameraStream(){
   catch(e){lastError=e;if(e&&(e.name==='NotAllowedError'||e.name==='SecurityError'))throw e}
  }
  throw lastError||Error('Could not access camera');
+}
+
+async function createNativeDetector(){
+ try{
+  if(!('BarcodeDetector' in window)||typeof BarcodeDetector.getSupportedFormats!=='function')return null;
+  const supported=await BarcodeDetector.getSupportedFormats();
+  // Use the native detector only when it can read every format we need.
+  if(!SCAN_FORMATS.every(f=>supported.indexOf(f)>=0))return null;
+  return new BarcodeDetector({formats:SCAN_FORMATS});
+ }catch(e){return null}
+}
+
+/* UPC-E: ZXing-js 0.21.3's UPCEReader is broken (its decodeMiddle returns a number where
+   the base class expects an object), so UPC-E can never decode through ZXing. This is a
+   small checksum-validated UPC-E row decoder used as a supplement on ZXing frames.
+   lumRow: array-like of 0..255 luminance for one image row. Returns 8 digits or null. */
+const UPCE_L=['0001101','0011001','0010011','0111101','0100011','0110001','0101111','0111011','0110111','0001011'];
+/* G-code is the reverse of the complemented L-code. */
+const UPCE_G=UPCE_L.map(p=>p.split('').map(c=>c==='1'?'0':'1').reverse().join(''));
+const UPCE_PARITY0=['EEEOOO','EEOEOO','EEOOEO','EEOOOE','EOEEOO','EOOEEO','EOOOEE','EOEOEO','EOEOOE','EOOEOE'];
+function upcAChecksumOk(d){
+ if(!/^\d{12}$/.test(d))return false;
+ let sum=0;for(let i=0;i<11;i++)sum+=(+d[i])*(i%2===0?3:1);
+ return (10-sum%10)%10===+d[11];
+}
+function upcEToUpcA(d8){
+ const ns=d8[0],m=d8.slice(1,7),chk=d8[7],l=m[5];
+ let body;
+ if(l==='0'||l==='1'||l==='2')body=ns+m.slice(0,2)+l+'0000'+m.slice(2,5);
+ else if(l==='3')body=ns+m.slice(0,3)+'00000'+m.slice(3,5);
+ else if(l==='4')body=ns+m.slice(0,4)+'00000'+m[4];
+ else body=ns+m.slice(0,5)+'0000'+l;
+ return body+chk;
+}
+function decodeUpcERowOnce(runs){
+ // runs: array of {bar:boolean,len:number}; need start(3)+24+end(6)=33 runs beginning on a bar
+ for(let i=0;i+33<=runs.length;i++){
+  if(!runs[i].bar)continue;
+  const unit=(runs[i].len+runs[i+1].len+runs[i+2].len)/3;
+  if(unit<1.5)continue;
+  // quiet zone before the start guard
+  if(i>0&&runs[i-1].len<unit*4)continue;
+  let ok=true;
+  for(let k=0;k<3;k++)if(Math.abs(runs[i+k].len/unit-1)>0.6){ok=false;break}
+  if(!ok)continue;
+  let digits='',parity='',p=i+3;
+  for(let d=0;d<6&&ok;d++){
+   const w=[runs[p].len,runs[p+1].len,runs[p+2].len,runs[p+3].len];
+   const tot=w[0]+w[1]+w[2]+w[3];
+   let pat='';
+   const mods=w.map(x=>x*7/tot);
+   if(mods.some(m=>Math.abs(m-Math.round(m))>0.5)){ok=false;break}
+   mods.forEach((m,idx)=>{pat+=((runs[p].bar?idx%2===0:idx%2===1)?'1':'0').repeat(Math.max(1,Math.round(m)))});
+   let found=-1,par='';
+   for(let n=0;n<10;n++){if(UPCE_L[n]===pat){found=n;par='O';break}if(UPCE_G[n]===pat){found=n;par='E';break}}
+   if(found<0){ok=false;break}
+   digits+=found;parity+=par;p+=4;
+  }
+  if(!ok)continue;
+  // end guard: 6 alternating runs of ~1 unit starting with a space
+  let endOk=!runs[p].bar;
+  for(let k=0;k<6&&endOk;k++)if(Math.abs(runs[p+k].len/unit-1)>0.7)endOk=false;
+  if(!endOk)continue;
+  // quiet zone after the end guard
+  if(p+6<runs.length&&runs[p+6].len<unit*4)continue;
+  let ns=-1,chk=-1;
+  for(let n=0;n<=1&&ns<0;n++)for(let c=0;c<10;c++){
+   const want=n===0?UPCE_PARITY0[c]:UPCE_PARITY0[c].replace(/./g,x=>x==='E'?'O':'E');
+   if(want===parity){ns=n;chk=c;break}
+  }
+  if(ns<0)continue;
+  const d8=ns+digits+chk;
+  if(upcAChecksumOk(upcEToUpcA(d8)))return d8;
+ }
+ return null;
+}
+function decodeUpcERow(lumRow){
+ const n=lumRow.length;
+ if(n<40)return null;
+ let min=255,max=0;
+ for(let i=0;i<n;i++){const v=lumRow[i];if(v<min)min=v;if(v>max)max=v}
+ if(max-min<40)return null;
+ const mid=(min+max)/2;
+ const runs=[];
+ let cur=lumRow[0]<mid,len=0;
+ for(let i=0;i<n;i++){
+  const dark=lumRow[i]<mid;
+  if(dark===cur)len++;else{runs.push({bar:cur,len});cur=dark;len=1}
+ }
+ runs.push({bar:cur,len});
+ const hit=decodeUpcERowOnce(runs);
+ if(hit)return hit;
+ // upside-down barcode
+ return decodeUpcERowOnce(runs.slice().reverse());
+}
+function decodeUpcEFromLuminance(lum){
+ try{
+  const h=lum.getHeight(),w=lum.getWidth();
+  let buf=new Uint8ClampedArray(w);
+  for(let k=1;k<=9;k++){
+   const row=lum.getRow(Math.min(h-1,Math.floor(h*k/10)),buf);
+   const hit=decodeUpcERow(row);
+   if(hit)return hit;
+  }
+ }catch(e){}
+ return null;
+}
+
+function createZXingDecoder(ZX){
+ const hints=new Map();
+ hints.set(ZX.DecodeHintType.TRY_HARDER,true);
+ hints.set(ZX.DecodeHintType.POSSIBLE_FORMATS,[
+  ZX.BarcodeFormat.QR_CODE,ZX.BarcodeFormat.EAN_13,ZX.BarcodeFormat.EAN_8,
+  ZX.BarcodeFormat.UPC_A,ZX.BarcodeFormat.UPC_E,ZX.BarcodeFormat.CODE_128,
+  ZX.BarcodeFormat.CODE_39,ZX.BarcodeFormat.ITF
+ ]);
+ const reader=new ZX.MultiFormatReader();
+ reader.setHints(hints);
+ const isMiss=e=>e instanceof ZX.NotFoundException||e instanceof ZX.ChecksumException||e instanceof ZX.FormatException;
+ return {
+  // Returns the decoded text, or null when the frame holds no readable code.
+  decodeCanvas(canvas){
+   const lum=new ZX.HTMLCanvasElementLuminanceSource(canvas);
+   // UPC-E supplement first: ZXing's TRY_HARDER pass rotates the luminance source
+   // in place, so row scans must run on the untouched frame. Checksum-validated.
+   const upce=decodeUpcEFromLuminance(lum);
+   if(upce)return upce;
+   try{
+    const bitmap=new ZX.BinaryBitmap(new ZX.HybridBinarizer(lum));
+    const result=reader.decodeWithState(bitmap);
+    return result&&result.getText?result.getText():null;
+   }catch(e){
+    if(isMiss(e))return null;
+    throw e;
+   }finally{try{reader.reset()}catch(e){}}
+  }
+ };
+}
+
+/* One decode loop over the app-owned stream. */
+function startDecodeLoop(token,video,native,zxPromise){
+ const status=$('cameraStatus');
+ const canvas=document.createElement('canvas');
+ let ctx=null;
+ let stopped=false,timer=null,busy=false,frames=0,round=0,nativeFails=0,hardErrors=0;
+ let zxDecoder=null,useNative=!!native;
+ const alive=()=>!stopped&&token===camToken;
+ scanStop=()=>{stopped=true;clearTimeout(timer);try{canvas.width=0;canvas.height=0}catch(e){}};
+ const label=()=>'Scanning… '+video.videoWidth+'×'+video.videoHeight+' · '+frames+' frames checked. QR code ya barcode ko seedha rakhein.';
+ status.textContent=label();
+ const getCtx=()=>ctx||(ctx=canvas.getContext('2d',{willReadFrequently:true})||canvas.getContext('2d'));
+ const next=()=>{if(alive())timer=setTimeout(loop,useNative?150:120)};
+ const step=async()=>{
+  if(video.readyState<2||!video.videoWidth)return;
+  let code=null;
+  if(useNative){
+   try{
+    const found=await native.detect(video);
+    nativeFails=0;
+    if(found&&found.length&&found[0].rawValue)code=String(found[0].rawValue);
+   }catch(e){
+    // Native detector failing repeatedly: hand the SAME stream to ZXing.
+    if(++nativeFails>=5){useNative=false;console.warn('Native BarcodeDetector failed, switching to ZXing',e)}
+   }
+  }
+  if(!useNative&&!code){
+   if(!zxDecoder){
+    status.textContent='Loading scanner library…';
+    zxDecoder=createZXingDecoder(await zxPromise());
+    if(!alive())return;
+   }
+   // Alternate whole frame and centred crop: the crop favours small QR/1D codes.
+   const cv=grabFrame(video,canvas,getCtx(),1280,round++%2===0?null:0.6);
+   if(cv){code=zxDecoder.decodeCanvas(cv);hardErrors=0}
+  }
+  frames++;
+  if(!alive())return;
+  if(code){acceptScannedCode(code);return}
+  if(frames%8===0)status.textContent=label();
+ };
+ const loop=async()=>{
+  if(!alive())return;
+  if(busy)return next();
+  busy=true;
+  try{await step()}
+  catch(e){
+   console.warn('Scanner frame error:',e);
+   if(alive()&&++hardErrors>=15){
+    stopped=true;
+    status.textContent='Scanner error: '+(e&&e.message||e)+'. Close and reopen the scanner.';
+   }
+  }finally{busy=false}
+  next();
+ };
+ loop();
 }
 
 async function scan(target){
@@ -1398,34 +1542,32 @@ async function scan(target){
  try{
   if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)
    throw Error('Camera is unavailable. Open the HTTPS website or allow camera access in app settings.');
-  // iOS Safari/Chrome: let ZXing request and own the camera stream.
-  // This avoids resetting a manually attached stream during ZXing initialization.
-  if(isAppleMobileBrowser()){
-   await startZXing(token);
-   return;
-  }
+  // Start loading the decoder while the permission prompt is open.
+  let zxP=null;
+  const zxPromise=()=>zxP||(zxP=loadZXing());
+  zxPromise().catch(()=>{});
   const s=await getCameraStream();
   if(token!==camToken){s.getTracks().forEach(t=>t.stop());return}
   stream=s;
-  // iPhone Safari requires inline, muted playback for camera streams.
+  // iOS WebKit requires inline + muted playback for camera preview and frames.
   video.setAttribute('playsinline','');video.setAttribute('webkit-playsinline','');
   video.setAttribute('autoplay','');video.setAttribute('muted','');
   video.playsInline=true;video.webkitPlaysInline=true;
-  video.muted=true;video.autoplay=true;video.controls=false;video.srcObject=s;
-  await video.play();
-  // Safari may take longer than Android to deliver its first camera frame.
-  for(let i=0;i<80&&!video.videoWidth&&token===camToken;i++)await new Promise(r=>setTimeout(r,100));
+  video.muted=true;video.autoplay=true;video.controls=false;
+  video.srcObject=s;
+  try{await video.play()}catch(e){if(e&&e.name==='NotAllowedError')throw e}
+  await waitForVideoFrames(video,token,8000);
   if(token!==camToken)return;
-  if(!video.videoWidth)throw Error('Camera started but video frames are not available. Close other camera apps and retry.');
-  if('BarcodeDetector' in window&&startNativeScanner(token))return;
-  // Native detector unavailable: release the manually opened stream before
-  // ZXing obtains and owns its own camera stream.
-  stopStream();
-  await startZXing(token);
+  const native=await createNativeDetector();
+  if(token!==camToken)return;
+  if(!native)await zxPromise();      // surface a library-load error now, not silently
+  if(token!==camToken)return;
+  startDecodeLoop(token,video,native,zxPromise);
  }catch(e){
-  if(token!==camToken)return;
+  if(token!==camToken||(e&&e.cancelled))return;
+  stopStream();
   const name=e&&e.name;
-  status.textContent=name==='NotAllowedError'?'Camera permission denied. Allow camera access in Settings.':
+  status.textContent=name==='NotAllowedError'?'Camera permission denied. Allow camera access for this site in Settings, then reopen the scanner.':
    name==='NotFoundError'?'No camera was found.':
    name==='NotReadableError'?'Camera is being used by another app. Close it and retry.':
    (e&&e.message)||'Could not start camera.';
@@ -1433,6 +1575,7 @@ async function scan(target){
 }
 document.addEventListener('visibilitychange',()=>{if(document.hidden)closeCamera()});
 window.addEventListener('pagehide',closeCamera);
+/* SCANNER:END */
 
 /* USB / Bluetooth barcode scanners (keyboard-wedge mode).
    Scanners type the barcode quickly and finish with Enter. If an input is

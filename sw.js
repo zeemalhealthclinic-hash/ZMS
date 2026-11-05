@@ -1,7 +1,9 @@
 // Zeemal Health Clinic offline support. Bump CACHE when the offline shell changes.
-const CACHE='zeemal-clinic-v8';
+const CACHE='zeemal-clinic-v9';
 const CORE=['./','./index.html','./manifest.json'];
+const ZXING='https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js';
 const SDK=[
+ ZXING,
  'https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js',
  'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js',
  'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js'
@@ -25,8 +27,8 @@ self.addEventListener('fetch',e=>{
    if(r&&r.status===200){const cp=r.clone();caches.open(CACHE).then(c=>c.put(req,cp))}
    return r;
   }).catch(()=>caches.match(req).then(m=>m||caches.match('./index.html'))));
- }else if(url.hostname==='www.gstatic.com'){
-  // Firebase scripts: saved copy pehle.
+ }else if(url.hostname==='www.gstatic.com'||(/^(cdn\.jsdelivr\.net|unpkg\.com)$/.test(url.hostname)&&url.pathname.indexOf('@zxing/library@0.21.3')>=0)){
+  // Firebase scripts and the pinned ZXing scanner library: saved copy pehle.
   e.respondWith(caches.match(req).then(m=>m||fetch(req).then(r=>{
    const cp=r.clone();caches.open(CACHE).then(c=>c.put(req,cp));return r;
   })));
