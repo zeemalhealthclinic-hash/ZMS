@@ -1,5 +1,5 @@
 // Zeemal Health Clinic offline support. Bump CACHE when the offline shell changes.
-const CACHE='zeemal-clinic-v10';
+const CACHE='zeemal-clinic-v9';
 const CORE=['./','./index.html','./manifest.json'];
 const ZXING='https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js';
 const SDK=[
