@@ -1284,12 +1284,14 @@ function loadZXing(){
  return zxingLoadPromise;
 }
 
-/* ZXing continuous decoder; supports all requested formats including QR. */
+/* ZXing camera decoder. Let ZXing own the iOS camera stream.
+   Its continuous-video method resets its reader and attaches its own stream;
+   therefore it must NOT receive a video element whose stream was opened here. */
 async function startZXing(token){
  const status=$('cameraStatus');
  status.textContent='Loading scanner library…';
  const ZX=await loadZXing();
- if(token!==camToken||!stream)return;
+ if(token!==camToken)return;
  const hints=new Map();
  hints.set(ZX.DecodeHintType.TRY_HARDER,true);
  hints.set(ZX.DecodeHintType.POSSIBLE_FORMATS,[
@@ -1300,7 +1302,13 @@ async function startZXing(token){
  const reader=new ZX.BrowserMultiFormatReader(hints,250);
  zxingReader=reader;
  const video=$('video');
- let stopped=false,timer=null,busy=false;
+ video.setAttribute('playsinline','');
+ video.setAttribute('webkit-playsinline','');
+ video.setAttribute('autoplay','');
+ video.setAttribute('muted','');
+ video.playsInline=true;video.webkitPlaysInline=true;
+ video.muted=true;video.autoplay=true;video.controls=false;
+ let stopped=false;
  const isNormalMiss=e=>{
   const n=String(e&&e.name||'');
   return n==='NotFoundException'||n==='ChecksumException'||n==='FormatException';
@@ -1318,38 +1326,17 @@ async function startZXing(token){
  };
  scanStop=()=>{
   stopped=true;
-  clearTimeout(timer);
   try{reader.reset()}catch(e){}
  };
  status.textContent='Scanning… QR code ya barcode ko camera ke samne seedha rakhein.';
- // Use the browser reader's supported continuous-video API. It manages
- // frame capture/canvas creation internally and avoids passing a canvas
- // into the lower-level decode() method.
- if(typeof reader.decodeFromVideoElementContinuously==='function'){
-  try{
-   await reader.decodeFromVideoElementContinuously(video,(result,error)=>onDecode(result,error));
-   return;
-  }catch(e){
-   if(stopped||token!==camToken)return;
-   console.warn('Continuous video decoder unavailable; using video-frame fallback:',e);
-  }
+ try{
+  // ZXing obtains the environment camera itself and binds it to this preview.
+  await reader.decodeFromVideoDevice(undefined,video,(result,error)=>onDecode(result,error));
+ }finally{
+  // If the user closed the scanner while the permission prompt was open,
+  // release any stream that became available after the close action.
+  if(stopped||token!==camToken){try{reader.reset()}catch(e){}}
  }
- // Compatibility fallback for builds without the continuous helper:
- // BrowserCodeReader.decode() accepts a video element, not a raw canvas.
- const loop=()=>{
-  if(stopped||token!==camToken||!stream||busy)return;
-  if(video.readyState<HTMLMediaElement.HAVE_CURRENT_DATA||video.videoWidth<=0||video.videoHeight<=0){
-   timer=setTimeout(loop,250);return;
-  }
-  busy=true;
-  try{
-   const result=reader.decode(video);
-   if(result)onDecode(result,null);
-  }catch(e){if(!isNormalMiss(e))onDecode(null,e)}
-  finally{busy=false}
-  if(!stopped&&token===camToken&&stream)timer=setTimeout(loop,250);
- };
- loop();
 }
 
 /* Native BarcodeDetector is used only when available and supported. */
@@ -1375,6 +1362,7 @@ function startNativeScanner(token){
     failures++;
     if(failures>=8){
      stopped=true;clearTimeout(timer);scanStop=null;
+     stopStream();
      startZXing(token).catch(err=>{if(token===camToken)$('cameraStatus').textContent=err&&err.message||'Scanner failed'});
      return;
     }
@@ -1410,6 +1398,12 @@ async function scan(target){
  try{
   if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)
    throw Error('Camera is unavailable. Open the HTTPS website or allow camera access in app settings.');
+  // iOS Safari/Chrome: let ZXing request and own the camera stream.
+  // This avoids resetting a manually attached stream during ZXing initialization.
+  if(isAppleMobileBrowser()){
+   await startZXing(token);
+   return;
+  }
   const s=await getCameraStream();
   if(token!==camToken){s.getTracks().forEach(t=>t.stop());return}
   stream=s;
@@ -1423,8 +1417,10 @@ async function scan(target){
   for(let i=0;i<80&&!video.videoWidth&&token===camToken;i++)await new Promise(r=>setTimeout(r,100));
   if(token!==camToken)return;
   if(!video.videoWidth)throw Error('Camera started but video frames are not available. Close other camera apps and retry.');
-  // iPhone Safari / iPad / iOS webview: use ZXing directly, not the WASM ponyfill.
-  if(!isAppleMobileBrowser()&&'BarcodeDetector' in window&&startNativeScanner(token))return;
+  if('BarcodeDetector' in window&&startNativeScanner(token))return;
+  // Native detector unavailable: release the manually opened stream before
+  // ZXing obtains and owns its own camera stream.
+  stopStream();
   await startZXing(token);
  }catch(e){
   if(token!==camToken)return;
