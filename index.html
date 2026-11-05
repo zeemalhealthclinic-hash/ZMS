@@ -1384,10 +1384,14 @@ async function scan(target){
   const s=await getCameraStream();
   if(token!==camToken){s.getTracks().forEach(t=>t.stop());return}
   stream=s;
+  // iPhone Safari requires inline, muted playback for camera streams.
   video.setAttribute('playsinline','');video.setAttribute('webkit-playsinline','');
-  video.muted=true;video.autoplay=true;video.srcObject=s;
+  video.setAttribute('autoplay','');video.setAttribute('muted','');
+  video.playsInline=true;video.webkitPlaysInline=true;
+  video.muted=true;video.autoplay=true;video.controls=false;video.srcObject=s;
   await video.play();
-  for(let i=0;i<40&&!video.videoWidth&&token===camToken;i++)await new Promise(r=>setTimeout(r,100));
+  // Safari may take longer than Android to deliver its first camera frame.
+  for(let i=0;i<80&&!video.videoWidth&&token===camToken;i++)await new Promise(r=>setTimeout(r,100));
   if(token!==camToken)return;
   if(!video.videoWidth)throw Error('Camera started but video frames are not available. Close other camera apps and retry.');
   // iPhone Safari / iPad / iOS webview: use ZXing directly, not the WASM ponyfill.
