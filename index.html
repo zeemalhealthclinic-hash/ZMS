@@ -1300,27 +1300,40 @@ async function startZXing(token){
  const reader=new ZX.BrowserMultiFormatReader(hints,250);
  zxingReader=reader;
  const video=$('video');
- status.textContent='Point the camera at a barcode or QR code…';
- let stopped=false;
- scanStop=()=>{stopped=true;try{reader.reset()}catch(e){}};
- try{
-  reader.decodeFromVideoElementContinuously(video,(result,error)=>{
-   if(stopped||token!==camToken||!stream)return;
+ // iOS Safari: decode camera frames ourselves instead of relying on ZXing's
+ // continuous-video loop, which can silently stall on some Safari versions.
+ const canvas=document.createElement('canvas');
+ const ctx=canvas.getContext('2d',{willReadFrequently:true});
+ if(!ctx)throw Error('Safari could not prepare the scanner canvas.');
+ let stopped=false,timer=null,busy=false,attempts=0;
+ scanStop=()=>{stopped=true;clearTimeout(timer);try{reader.reset()}catch(e){}};
+ status.textContent='Scanning… Hold QR/barcode steady, about 10–20 cm from camera.';
+ const loop=()=>{
+  if(stopped||token!==camToken||!stream||busy)return;
+  if(!video.videoWidth||!video.videoHeight){timer=setTimeout(loop,250);return}
+  busy=true;
+  try{
+   if(canvas.width!==video.videoWidth||canvas.height!==video.videoHeight){
+    canvas.width=video.videoWidth;canvas.height=video.videoHeight;
+   }
+   ctx.drawImage(video,0,0,canvas.width,canvas.height);
+   const result=reader.decodeFromCanvas(canvas);
    if(result){
     const code=result.getText();
     if(code){acceptScannedCode(code);return}
    }
-   if(error){
-    const name=String(error.name||'');
-    // These are normal "no code in this frame" decoding outcomes.
-    if(!['NotFoundException','ChecksumException','FormatException'].includes(name)){
-     status.textContent='Scanner issue: '+(error.message||name||'decoder error')+'. Keep camera steady or close and retry.';
-    }
+  }catch(error){
+   const name=String(error&&error.name||'');
+   if(!['NotFoundException','ChecksumException','FormatException'].includes(name)){
+    status.textContent='Scanner error: '+(error&&error.message||name||'decode error');
+   }else{
+    attempts++;
+    if(attempts===1)status.textContent='Camera active. Searching for code…';
    }
-  });
- }catch(e){
-  if(token===camToken)status.textContent='Scanner error: '+(e&&e.message||e);
- }
+  }finally{busy=false}
+  if(!stopped&&token===camToken&&stream)timer=setTimeout(loop,220);
+ };
+ loop();
 }
 
 /* Native BarcodeDetector is used only when available and supported. */
