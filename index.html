@@ -1300,60 +1300,54 @@ async function startZXing(token){
  const reader=new ZX.BrowserMultiFormatReader(hints,250);
  zxingReader=reader;
  const video=$('video');
- const canvas=document.createElement('canvas');
- const ctx=canvas.getContext('2d',{willReadFrequently:true});
- if(!ctx)throw Error('Safari could not prepare the scanner canvas.');
- let stopped=false,timer=null,busy=false,attempts=0;
- scanStop=()=>{stopped=true;clearTimeout(timer);try{reader.reset()}catch(e){}};
- status.textContent='Scanning… Hold QR/barcode steady, about 10–20 cm from camera.';
+ let stopped=false,timer=null,busy=false;
+ const isNormalMiss=e=>{
+  const n=String(e&&e.name||'');
+  return n==='NotFoundException'||n==='ChecksumException'||n==='FormatException';
+ };
+ const onDecode=(result,error)=>{
+  if(stopped||token!==camToken)return;
+  if(result){
+   const code=result.getText&&result.getText();
+   if(code){acceptScannedCode(code);return}
+  }
+  if(error&&!isNormalMiss(error)){
+   status.textContent='Scanner is retrying…';
+   console.warn('ZXing scan attempt:',error);
+  }
+ };
+ scanStop=()=>{
+  stopped=true;
+  clearTimeout(timer);
+  try{reader.reset()}catch(e){}
+ };
+ status.textContent='Scanning… QR code ya barcode ko camera ke samne seedha rakhein.';
+ // Use the browser reader's supported continuous-video API. It manages
+ // frame capture/canvas creation internally and avoids passing a canvas
+ // into the lower-level decode() method.
+ if(typeof reader.decodeFromVideoElementContinuously==='function'){
+  try{
+   await reader.decodeFromVideoElementContinuously(video,(result,error)=>onDecode(result,error));
+   return;
+  }catch(e){
+   if(stopped||token!==camToken)return;
+   console.warn('Continuous video decoder unavailable; using video-frame fallback:',e);
+  }
+ }
+ // Compatibility fallback for builds without the continuous helper:
+ // BrowserCodeReader.decode() accepts a video element, not a raw canvas.
  const loop=()=>{
   if(stopped||token!==camToken||!stream||busy)return;
-
-  // Wait until Safari has decoded a real video frame and reports valid dimensions.
-  const frameReady=video.readyState>=HTMLMediaElement.HAVE_CURRENT_DATA;
-  const frameWidth=Number(video.videoWidth)||0;
-  const frameHeight=Number(video.videoHeight)||0;
-  if(!frameReady||frameWidth<=0||frameHeight<=0){
-   timer=setTimeout(loop,250);
-   return;
+  if(video.readyState<HTMLMediaElement.HAVE_CURRENT_DATA||video.videoWidth<=0||video.videoHeight<=0){
+   timer=setTimeout(loop,250);return;
   }
-
   busy=true;
   try{
-   // Only assign positive integer canvas dimensions; never decode a zero-size frame.
-   const width=Math.floor(frameWidth);
-   const height=Math.floor(frameHeight);
-   if(width<=0||height<=0){
-    timer=setTimeout(loop,250);
-    return;
-   }
-   if(canvas.width!==width||canvas.height!==height){
-    canvas.width=width;
-    canvas.height=height;
-   }
-   if(canvas.width<=0||canvas.height<=0){
-    timer=setTimeout(loop,250);
-    return;
-   }
-
-   ctx.drawImage(video,0,0,width,height);
-   const result=typeof reader.decodeFromCanvas==='function'
-    ?reader.decodeFromCanvas(canvas)
-    :reader.decode(canvas);
-   if(result){
-    const code=result.getText();
-    if(code){acceptScannedCode(code);return}
-   }
-  }catch(error){
-   const name=String(error&&error.name||'');
-   if(name==='NotFoundException'||name==='ChecksumException'||name==='FormatException'){
-    attempts++;
-    if(attempts===1)status.textContent='Camera active. Searching for code…';
-   }else{
-    status.textContent='Scanner error: '+(error&&error.message||name||'decode error');
-   }
-  }finally{busy=false}
-  if(!stopped&&token===camToken&&stream)timer=setTimeout(loop,220);
+   const result=reader.decode(video);
+   if(result)onDecode(result,null);
+  }catch(e){if(!isNormalMiss(e))onDecode(null,e)}
+  finally{busy=false}
+  if(!stopped&&token===camToken&&stream)timer=setTimeout(loop,250);
  };
  loop();
 }
