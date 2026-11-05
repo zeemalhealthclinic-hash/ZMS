@@ -2,8 +2,7 @@ name: Clinic Static Checks
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -14,86 +13,36 @@ jobs:
     name: Validate clinic HTML and scanner code
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
-
       - name: Check inline JavaScript syntax
         run: |
           python3 - <<'PY'
-          from html.parser import HTMLParser
-          from pathlib import Path
-          import subprocess
-
-          class Scripts(HTMLParser):
-              def __init__(self):
-                  super().__init__()
-                  self.items = []
-                  self.current = None
-              def handle_starttag(self, tag, attrs):
-                  if tag.lower() == "script":
-                      attrs = dict(attrs)
-                      self.current = {"external": bool(attrs.get("src")), "data": ""}
-              def handle_data(self, data):
-                  if self.current is not None:
-                      self.current["data"] += data
-              def handle_endtag(self, tag):
-                  if tag.lower() == "script" and self.current is not None:
-                      if not self.current["external"] and self.current["data"].strip():
-                          self.items.append(self.current["data"])
-                      self.current = None
-
-          html = Path("index.html").read_text(encoding="utf-8")
-          parser = Scripts()
-          parser.feed(html)
-          if not parser.items:
-              raise SystemExit("No inline JavaScript blocks found")
-          for i, source in enumerate(parser.items, 1):
-              path = Path(f"/tmp/clinic-inline-{i}.js")
-              path.write_text(source, encoding="utf-8")
-              subprocess.run(["node", "--check", str(path)], check=True)
-          print(f"JavaScript syntax OK: {len(parser.items)} inline script blocks")
+          import re, subprocess
+          html = open("index.html", encoding="utf-8").read()
+          blocks = [b for b in re.findall(r"<script(?![^>]*\bsrc=)[^>]*>([\s\S]*?)</script>", html) if b.strip()]
+          assert blocks, "no inline scripts"
+          for i, b in enumerate(blocks, 1):
+              open(f"/tmp/s{i}.js", "w", encoding="utf-8").write(b)
+              subprocess.run(["node", "--check", f"/tmp/s{i}.js"], check=True)
+          print("syntax OK", len(blocks))
           PY
-
-      - name: Check scanner API and supported formats
+      - name: Check scanner
         run: |
           python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          html = Path("index.html").read_text(encoding="utf-8")
-          sw = Path("sw.js").read_text(encoding="utf-8")
-          required = [
-              "@zxing/library@0.21.3",
-              "decodeFromVideoDevice",
-              "BarcodeFormat.QR_CODE",
-              "BarcodeFormat.EAN_13",
-              "BarcodeFormat.EAN_8",
-              "BarcodeFormat.UPC_A",
-              "BarcodeFormat.UPC_E",
-              "BarcodeFormat.CODE_128",
-              "BarcodeFormat.CODE_39",
-              "BarcodeFormat.ITF",
-              "function startZXing(token)",
-              "function startNativeScanner(token)",
-              "function closeCamera()",
-          ]
-          missing = [item for item in required if item not in html]
-          if missing:
-              raise SystemExit("Missing scanner requirements: " + ", ".join(missing))
-          if "zeemal-clinic-v8" not in sw:
-              raise SystemExit("Service worker cache version was not bumped to v8")
-          apple_path = re.search(
-              r"if\(isAppleMobileBrowser\(\)\)\s*\{\s*await startZXing\(token\);\s*return;\s*\}",
-              html
-          )
-          if not apple_path:
-              raise SystemExit("iOS-specific ZXing camera path is missing")
-          if "decodeFromVideoElementContinuously(video" in html:
-              raise SystemExit("Unsafe pre-attached video stream decoder path remains")
-          print("Scanner API, QR/barcode formats, iOS camera ownership and cache checks OK")
+          html = open("index.html", encoding="utf-8").read()
+          sw = open("sw.js", encoding="utf-8").read()
+          need = ["@zxing/library@0.21.3", "MultiFormatReader", "HTMLCanvasElementLuminanceSource",
+                  "function grabFrame", "function waitForVideoFrames", "function closeCamera()",
+                  "BarcodeFormat.QR_CODE", "BarcodeFormat.EAN_13", "BarcodeFormat.EAN_8",
+                  "BarcodeFormat.UPC_A", "BarcodeFormat.UPC_E", "BarcodeFormat.CODE_128",
+                  "BarcodeFormat.CODE_39", "BarcodeFormat.ITF"]
+          missing = [n for n in need if n not in html]
+          assert not missing, missing
+          for bad in ["decodeFromVideoDevice", "decodeFromCanvas", "BrowserMultiFormatReader"]:
+              assert bad not in html, "banned: " + bad
+          assert "zeemal-clinic-v9" in sw, "sw cache not v9"
+          print("scanner checks OK")
           PY
