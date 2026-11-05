@@ -406,7 +406,7 @@ const FIREBASE_CONFIG={
 </div></div>
 
 <div id="cameraBox">
- <h3>Barcode Scanner</h3><p id="cameraStatus">Starting camera…</p>
+ <h3>Scan QR Code or Barcode</h3><p id="cameraStatus">Starting camera…</p>
  <video id="video" playsinline muted></video><br><br>
  <button class="btn" type="button" onclick="closeCamera()">Close Camera</button>
 </div>
@@ -1263,7 +1263,7 @@ function acceptScannedCode(code){
  closeCamera();
  try{if(navigator.vibrate)navigator.vibrate(50)}catch(e){}
  if(target==='bill'){$('bsearch').value=code;addBill()}
- else{$('mbarcode').value=code;message('Barcode entered successfully.')}
+ else{$('mbarcode').value=code;message('Code scanned successfully.')}
 }
 
 /* ZXing loader: retry two CDN endpoints; reset failed promise so retry is possible. */
@@ -1344,9 +1344,11 @@ async function createNativeDetector(){
  try{
   if(!('BarcodeDetector' in window)||typeof BarcodeDetector.getSupportedFormats!=='function')return null;
   const supported=await BarcodeDetector.getSupportedFormats();
-  // Use the native detector only when it can read every format we need.
-  if(!SCAN_FORMATS.every(f=>supported.indexOf(f)>=0))return null;
-  return new BarcodeDetector({formats:SCAN_FORMATS});
+  // Use supported formats instead of requiring every format: this preserves
+  // native QR detection on browsers that do not support every 1D barcode type.
+  const formats=SCAN_FORMATS.filter(f=>supported.includes(f));
+  if(!formats.length)return null;
+  return new BarcodeDetector({formats});
  }catch(e){return null}
 }
 
@@ -1447,32 +1449,41 @@ function decodeUpcEFromLuminance(lum){
 }
 
 function createZXingDecoder(ZX){
- const hints=new Map();
- hints.set(ZX.DecodeHintType.TRY_HARDER,true);
- hints.set(ZX.DecodeHintType.POSSIBLE_FORMATS,[
+ const formats=[
   ZX.BarcodeFormat.QR_CODE,ZX.BarcodeFormat.EAN_13,ZX.BarcodeFormat.EAN_8,
   ZX.BarcodeFormat.UPC_A,ZX.BarcodeFormat.UPC_E,ZX.BarcodeFormat.CODE_128,
   ZX.BarcodeFormat.CODE_39,ZX.BarcodeFormat.ITF
- ]);
+ ];
+ const hints=new Map();
+ hints.set(ZX.DecodeHintType.TRY_HARDER,true);
+ hints.set(ZX.DecodeHintType.POSSIBLE_FORMATS,formats);
  const reader=new ZX.MultiFormatReader();
  reader.setHints(hints);
+ const qrReader=new ZX.QRCodeReader();
  const isMiss=e=>e instanceof ZX.NotFoundException||e instanceof ZX.ChecksumException||e instanceof ZX.FormatException;
  return {
-  // Returns the decoded text, or null when the frame holds no readable code.
+  // Try QR independently first, then all requested barcode formats.
+  // Hybrid and global-histogram binarizers help with uneven lighting.
   decodeCanvas(canvas){
-   const lum=new ZX.HTMLCanvasElementLuminanceSource(canvas);
-   // UPC-E supplement first: ZXing's TRY_HARDER pass rotates the luminance source
-   // in place, so row scans must run on the untouched frame. Checksum-validated.
-   const upce=decodeUpcEFromLuminance(lum);
+   const upce=decodeUpcEFromLuminance(new ZX.HTMLCanvasElementLuminanceSource(canvas));
    if(upce)return upce;
-   try{
-    const bitmap=new ZX.BinaryBitmap(new ZX.HybridBinarizer(lum));
-    const result=reader.decodeWithState(bitmap);
-    return result&&result.getText?result.getText():null;
-   }catch(e){
-    if(isMiss(e))return null;
-    throw e;
-   }finally{try{reader.reset()}catch(e){}}
+   const binarizers=[ZX.HybridBinarizer,ZX.GlobalHistogramBinarizer];
+   for(const Binarizer of binarizers){
+    try{
+     const bitmap=new ZX.BinaryBitmap(new Binarizer(new ZX.HTMLCanvasElementLuminanceSource(canvas)));
+     const qr=qrReader.decode(bitmap);
+     if(qr&&qr.getText)return qr.getText();
+    }catch(e){if(!isMiss(e))console.debug('QR decode pass:',e)}
+   }
+   for(const Binarizer of binarizers){
+    try{
+     const bitmap=new ZX.BinaryBitmap(new Binarizer(new ZX.HTMLCanvasElementLuminanceSource(canvas)));
+     const result=reader.decodeWithState(bitmap);
+     if(result&&result.getText)return result.getText();
+    }catch(e){if(!isMiss(e))console.debug('Barcode decode pass:',e)}
+    finally{try{reader.reset()}catch(e){}}
+   }
+   return null;
   }
  };
 }
@@ -1486,7 +1497,7 @@ function startDecodeLoop(token,video,native,zxPromise){
  let zxDecoder=null,useNative=!!native;
  const alive=()=>!stopped&&token===camToken;
  scanStop=()=>{stopped=true;clearTimeout(timer);try{canvas.width=0;canvas.height=0}catch(e){}};
- const label=()=>'Scanning… '+video.videoWidth+'×'+video.videoHeight+' · '+frames+' frames checked. QR code ya barcode ko seedha rakhein.';
+ const label=()=>'Scanning QR codes and barcodes… '+video.videoWidth+'×'+video.videoHeight+' · '+frames+' frames checked. Keep the code clearly visible inside the camera view.';
  status.textContent=label();
  const getCtx=()=>ctx||(ctx=canvas.getContext('2d',{willReadFrequently:true})||canvas.getContext('2d'));
  const next=()=>{if(alive())timer=setTimeout(loop,useNative?150:120)};
