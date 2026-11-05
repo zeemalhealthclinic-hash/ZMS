@@ -1,5 +1,5 @@
 // Zeemal Health Clinic offline support. Bump CACHE when the offline shell changes.
-const CACHE='zeemal-clinic-v5';
+const CACHE='zeemal-clinic-v6';
 const CORE=['./','./index.html','./manifest.json'];
 const SDK=[
  'https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js',
