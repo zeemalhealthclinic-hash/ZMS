@@ -1300,8 +1300,6 @@ async function startZXing(token){
  const reader=new ZX.BrowserMultiFormatReader(hints,250);
  zxingReader=reader;
  const video=$('video');
- // iOS Safari: decode camera frames ourselves instead of relying on ZXing's
- // continuous-video loop, which can silently stall on some Safari versions.
  const canvas=document.createElement('canvas');
  const ctx=canvas.getContext('2d',{willReadFrequently:true});
  if(!ctx)throw Error('Safari could not prepare the scanner canvas.');
@@ -1310,16 +1308,35 @@ async function startZXing(token){
  status.textContent='Scanning… Hold QR/barcode steady, about 10–20 cm from camera.';
  const loop=()=>{
   if(stopped||token!==camToken||!stream||busy)return;
-  if(!video.videoWidth||!video.videoHeight){timer=setTimeout(loop,250);return}
+
+  // Wait until Safari has decoded a real video frame and reports valid dimensions.
+  const frameReady=video.readyState>=HTMLMediaElement.HAVE_CURRENT_DATA;
+  const frameWidth=Number(video.videoWidth)||0;
+  const frameHeight=Number(video.videoHeight)||0;
+  if(!frameReady||frameWidth<=0||frameHeight<=0){
+   timer=setTimeout(loop,250);
+   return;
+  }
+
   busy=true;
   try{
-   if(canvas.width!==video.videoWidth||canvas.height!==video.videoHeight){
-    canvas.width=video.videoWidth;canvas.height=video.videoHeight;
+   // Only assign positive integer canvas dimensions; never decode a zero-size frame.
+   const width=Math.floor(frameWidth);
+   const height=Math.floor(frameHeight);
+   if(width<=0||height<=0){
+    timer=setTimeout(loop,250);
+    return;
    }
-   ctx.drawImage(video,0,0,canvas.width,canvas.height);
-   /* Compatibility: some loaded ZXing UMD builds omit decodeFromCanvas().
-   BrowserCodeReader.decode() is the public media-element entry point and
-   accepts the canvas as a visual media element. */
+   if(canvas.width!==width||canvas.height!==height){
+    canvas.width=width;
+    canvas.height=height;
+   }
+   if(canvas.width<=0||canvas.height<=0){
+    timer=setTimeout(loop,250);
+    return;
+   }
+
+   ctx.drawImage(video,0,0,width,height);
    const result=typeof reader.decodeFromCanvas==='function'
     ?reader.decodeFromCanvas(canvas)
     :reader.decode(canvas);
@@ -1329,11 +1346,11 @@ async function startZXing(token){
    }
   }catch(error){
    const name=String(error&&error.name||'');
-   if(!['NotFoundException','ChecksumException','FormatException'].includes(name)){
-    status.textContent='Scanner error: '+(error&&error.message||name||'decode error');
-   }else{
+   if(name==='NotFoundException'||name==='ChecksumException'||name==='FormatException'){
     attempts++;
     if(attempts===1)status.textContent='Camera active. Searching for code…';
+   }else{
+    status.textContent='Scanner error: '+(error&&error.message||name||'decode error');
    }
   }finally{busy=false}
   if(!stopped&&token===camToken&&stream)timer=setTimeout(loop,220);
