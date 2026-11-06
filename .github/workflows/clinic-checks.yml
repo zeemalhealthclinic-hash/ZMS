@@ -43,6 +43,6 @@ jobs:
           assert not missing, missing
           for bad in ["decodeFromVideoDevice", "decodeFromCanvas", "BrowserMultiFormatReader"]:
               assert bad not in html, "banned: " + bad
-          assert "zeemal-clinic-v11" in sw, "sw cache not v10"
+          assert "zeemal-clinic-v12" in sw, "sw cache version mismatch"
           print("scanner checks OK")
           PY
