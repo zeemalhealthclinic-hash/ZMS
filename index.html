@@ -406,7 +406,7 @@ const FIREBASE_CONFIG={
 </div></div>
 
 <div id="cameraBox">
- <h3>Scan QR Code or Barcode</h3><p id="cameraStatus">Starting camera…</p>
+ <h3>Scan QR Code or Barcode</h3><p id="cameraStatus" aria-live="off" style="display:none"></p>
  <video id="video" playsinline muted></video><br><br>
  <button class="btn" type="button" onclick="closeCamera()">Close Camera</button>
 </div>
@@ -1137,9 +1137,9 @@ function loadActiveStore(){
  // Display a local copy immediately if the device is offline.
  try{
   const cached=localStorage.getItem('zeemalOffline_'+fbUser.uid+'_'+activeStoreId);
-  if(cached){const parsed=JSON.parse(cached);if(parsed&&typeof parsed==='object'){db=parsed;normalize();localCacheLoaded=true;if(navigator.onLine===false)cloudReady=true}}
+  if(cached){const parsed=JSON.parse(cached);if(parsed&&typeof parsed==='object'){db=parsed;normalize();localCacheLoaded=true;cloudReady=true;$('loading').style.display='none';setSync(navigator.onLine===false?'Offline · saved data ready':'Saved data ready · syncing…',navigator.onLine===false?'warn':'')}}
  }catch(e){console.warn('Offline data cache could not be loaded',e)}
- $('loading').style.display=navigator.onLine===false&&cloudReady?'none':'flex';
+ $('loading').style.display=cloudReady?'none':'flex';
  setSync(navigator.onLine===false&&cloudReady?'Offline · local data available':'Loading '+(activeStoreId==='store1'?'Store 1':'Store 2')+'…',navigator.onLine===false?'warn':'');render();
  unsub=fbDb.collection('stores').doc(activeStoreId).collection('data').onSnapshot(snap=>{
   const changed=applySnapshot(snap);
@@ -1497,7 +1497,7 @@ function startDecodeLoop(token,video,native,zxPromise){
  let zxDecoder=null,useNative=!!native;
  const alive=()=>!stopped&&token===camToken;
  scanStop=()=>{stopped=true;clearTimeout(timer);try{canvas.width=0;canvas.height=0}catch(e){}};
- const label=()=>'Scanning QR codes and barcodes… '+video.videoWidth+'×'+video.videoHeight+' · '+frames+' frames checked. Keep the code clearly visible inside the camera view.';
+ const label=()=>'';
  status.textContent=label();
  const getCtx=()=>ctx||(ctx=canvas.getContext('2d',{willReadFrequently:true})||canvas.getContext('2d'));
  const next=()=>{if(alive())timer=setTimeout(loop,useNative?150:120)};
@@ -1514,9 +1514,9 @@ function startDecodeLoop(token,video,native,zxPromise){
     if(++nativeFails>=5){useNative=false;console.warn('Native BarcodeDetector failed, switching to ZXing',e)}
    }
   }
-  if(!useNative&&!code){
+  if(!code){
    if(!zxDecoder){
-    status.textContent='Loading scanner library…';
+    status.textContent='';
     zxDecoder=createZXingDecoder(await zxPromise());
     if(!alive())return;
    }
@@ -1527,7 +1527,7 @@ function startDecodeLoop(token,video,native,zxPromise){
   frames++;
   if(!alive())return;
   if(code){acceptScannedCode(code);return}
-  if(frames%8===0)status.textContent=label();
+  /* Keep the scanner view clean: no instructional/status text. */
  };
  const loop=async()=>{
   if(!alive())return;
@@ -1552,7 +1552,7 @@ async function scan(target){
  const token=++camToken;
  const video=$('video'),status=$('cameraStatus');
  $('cameraBox').style.display='block';
- status.textContent='Waiting for camera permission…';
+ status.textContent='';
  try{
   if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia)
    throw Error('Camera is unavailable. Open the HTTPS website or allow camera access in app settings.');
