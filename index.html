@@ -180,6 +180,7 @@ const FIREBASE_CONFIG={
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-check-compat.js"></script>
 </head>
 <body>
 
@@ -1220,6 +1221,18 @@ function stopCloud(){
 function initCloud(){
  if(typeof firebase==='undefined'){showLogin('The login system did not load. Turn on the internet and refresh the page.');return}
  firebase.initializeApp(FIREBASE_CONFIG);
+ // Firebase App Check: reCAPTCHA Enterprise for this GitHub Pages Web App.
+ // Keep this before Auth/Firestore are initialized or used.
+ try{
+  if(!firebase.appCheck||!firebase.appCheck.ReCaptchaEnterpriseProvider)throw Error('Firebase App Check SDK/provider did not load');
+  firebase.appCheck().activate(
+   new firebase.appCheck.ReCaptchaEnterpriseProvider('6LfJRhUuAAAAACoKorqIUFqshXLd3_jwgwQN3a9s'),
+   true
+  );
+  console.info('Firebase App Check initialized.');
+ }catch(e){
+  console.error('Firebase App Check initialization failed:',e);
+ }
  fbAuth=firebase.auth();fbDb=firebase.firestore();
  fbDb.enablePersistence({synchronizeTabs:true}).catch(e=>console.warn('Firestore offline persistence unavailable:',e.code||e.message));
  // Explicitly keep the signed-in account stored on this device across outages/restarts.
