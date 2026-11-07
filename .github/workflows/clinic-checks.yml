@@ -48,6 +48,6 @@ jobs:
               assert required in html, "missing data safety guard: " + required
           print("inventory safety checks OK")
           print("scanner checks OK")
+          PY
       - name: Check service worker syntax
         run: node --check sw.js
-          PY
