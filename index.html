@@ -1094,6 +1094,8 @@ function buildDocs(){
 }
 function cloudPush(){
  if(!fbUser||!fbDb||!cloudReady)return;
+ // Never write cached/partial data back to Firestore before a complete server snapshot has been received.
+ if(!serverSnapshotReady){setSync('Checking cloud data…','warn');return;}
  const docs=buildDocs(),col=fbDb.collection('stores').doc(activeStoreId).collection('data');
  Object.keys(docs).forEach(k=>{
   if(docCache[k]===docs[k])return;
@@ -1148,7 +1150,9 @@ function loadActiveStore(){
    cloudReady=true;$('loading').style.display='none';
   }
   // Rebuild on the first clean server snapshot too (including an empty store), so stale local data cannot override cloud data.
-  if(changed||(!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites))rebuildDb();
+  // A Firestore cache snapshot can be incomplete. Keep the full local backup until a server snapshot confirms the complete collection.
+  if(!snap.metadata.fromCache&&(!snap.metadata.hasPendingWrites||changed))rebuildDb();
+  else if(!localCacheLoaded&&changed)rebuildDb();
   if(!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&fbUser){
    try{localStorage.setItem('zeemalOffline_'+fbUser.uid+'_'+activeStoreId,JSON.stringify(db))}catch(e){console.warn('Offline snapshot cache unavailable',e)}
   }
