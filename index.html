@@ -488,7 +488,7 @@ function readLegacy(){try{const s=JSON.parse(localStorage.getItem('zmsData'));re
 if(!CLOUD){const s=readLegacy();if(s)db=s}
 normalize();
 
-function canWrite(){if(CLOUD&&!cloudReady){message('Data is loading. Please wait…');return false}return true}
+function canWrite(){if(CLOUD&&(!cloudReady||!serverSnapshotReady||navigator.onLine===false)){message(navigator.onLine===false?'Offline mode: records are view-only. Reconnect before making changes.':'Cloud data is still being checked. Please wait…');return false}return true}
 function save(){
  if(CLOUD){
   // Local recovery copy for this account/store during network interruptions.
@@ -1227,7 +1227,7 @@ function initCloud(){
   fbAuth.onAuthStateChanged(u=>{if(u)startCloud(u);else stopCloud()});
  });
  window.addEventListener('offline',()=>{if(fbUser)setSync('Offline (will sync when connected)','warn')});
- window.addEventListener('online',()=>{if(fbUser){setSync('Checking server connection…','warn');/* The live server snapshot, not an empty pending-write queue, confirms sync. */}});
+ window.addEventListener('online',()=>{if(fbUser){serverSnapshotReady=false;setSync('Checking server connection…','warn');loadActiveStore();/* Re-read the complete server snapshot before allowing edits. */}});
 }
 function authErr(e){
  const m={'auth/invalid-email':'Enter a valid email address','auth/missing-email':'Enter your email address','auth/missing-password':'Enter your password',
