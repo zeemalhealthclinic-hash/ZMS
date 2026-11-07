@@ -1,6 +1,6 @@
 // Zeemal Health Clinic offline support. Bump CACHE when the offline shell changes.
-const CACHE='zeemal-clinic-v12';
-const CORE=['./','./index.html','./manifest.json'];
+const CACHE='zeemal-clinic-v13';
+const CORE=['./','./index.html','./manifest.json','./zeemal-health-clinic-logo.svg','./zeemal-health-clinic-logo.png'];
 const ZXING='https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js';
 const SDK=[
  ZXING,
@@ -24,7 +24,9 @@ self.addEventListener('fetch',e=>{
  if(url.origin===location.origin){
   // Apni files: pehle internet se taake update foran milay, na ho to saved copy.
   e.respondWith(fetch(req).then(r=>{
-   if(r&&r.status===200){const cp=r.clone();caches.open(CACHE).then(c=>c.put(req,cp))}
+   // Treat HTTP errors like network failures so a previously cached app shell remains usable.
+   if(!r||!r.ok)throw new Error('HTTP '+(r&&r.status));
+   const cp=r.clone();caches.open(CACHE).then(c=>c.put(req,cp)).catch(()=>{});
    return r;
   }).catch(()=>caches.match(req).then(m=>m||caches.match('./index.html'))));
  }else if(url.hostname==='www.gstatic.com'||(/^(cdn\.jsdelivr\.net|unpkg\.com)$/.test(url.hostname)&&url.pathname.indexOf('@zxing/library@0.21.3')>=0)){

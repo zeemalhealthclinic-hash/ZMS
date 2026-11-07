@@ -2,6 +2,8 @@ name: Clinic Static Checks
 
 on:
   push:
+    branches: [main, hardening/store1-store2-data-safety]
+  pull_request:
     branches: [main]
   workflow_dispatch:
 
@@ -43,6 +45,11 @@ jobs:
           assert not missing, missing
           for bad in ["decodeFromVideoDevice", "decodeFromCanvas", "BrowserMultiFormatReader"]:
               assert bad not in html, "banned: " + bad
-          assert "zeemal-clinic-v12" in sw, "sw cache version mismatch"
+          assert "zeemal-clinic-v13" in sw, "sw cache version mismatch"
+          for required in ["serverMedsCount", "Inventory safety lock", "zeemalConfirmed_", "Checking server connection", "Offline mode: records are view-only", "loadActiveStore();/* Re-read the complete server snapshot"]:
+              assert required in html, "missing data safety guard: " + required
+          print("inventory safety checks OK")
           print("scanner checks OK")
           PY
+      - name: Check service worker syntax
+        run: node --check sw.js
