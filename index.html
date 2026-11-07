@@ -1083,6 +1083,8 @@ const ACCOUNT_ACCESS={
  'L7HLgXwZHnSfdF8V6gek9RYxPsh2':{role:'store',stores:['store2'],email:'store02@zeemal.local'}
 };
 let fbAuth=null,fbDb=null,fbUser=null,unsub=null,docCache={},cloudReady=false,serverSnapshotReady=false,localCacheLoaded=false,syncTxt='',activeStoreId='store1',accountAccess=null;
+// Last complete server-confirmed inventory size; used to stop accidental mass deletion uploads.
+let serverMedsCount=null;
 function setSync(t,cls){syncTxt=t;const p=$('syncPill');p.className='pill '+(cls||'');p.textContent=(fbUser?(accountAccess&&accountAccess.role==='admin'?'Admin · ':'Store · '):'')+t}
 function showLogin(t){$('loginInfo').textContent=t;$('login').style.display='flex'}
 function buildDocs(){
@@ -1096,6 +1098,13 @@ function cloudPush(){
  if(!fbUser||!fbDb||!cloudReady)return;
  // Never write cached/partial data back to Firestore before a complete server snapshot has been received.
  if(!serverSnapshotReady){setSync('Checking cloud data…','warn');return;}
+ // Safety lock: this app has no bulk-delete workflow. A sudden large inventory drop
+ // is treated as a stale/partial cache and is NOT allowed to replace the server copy.
+ if(Number.isInteger(serverMedsCount)&&serverMedsCount>=10&&db.meds.length<Math.max(5,Math.ceil(serverMedsCount*0.5))){
+  setSync('⚠ Inventory safety lock — upload blocked','warn');
+  message('Safety lock: cloud has '+serverMedsCount+' medicines but this device has '+db.meds.length+'. Nothing was uploaded. Reload/check the store before saving.');
+  return;
+ }
  const docs=buildDocs(),col=fbDb.collection('stores').doc(activeStoreId).collection('data');
  Object.keys(docs).forEach(k=>{
   if(docCache[k]===docs[k])return;
@@ -1118,6 +1127,14 @@ function applySnapshot(snap){
   const j=(ch.doc.data()||{}).json;
   if(typeof j==='string'&&docCache[ch.doc.id]!==j){docCache[ch.doc.id]=j;changed=true}
  });
+ // Use the complete server snapshot (not a local cache estimate) as the protection baseline.
+ if(!snap.metadata.fromCache){
+  const main=snap.docs.find(d=>d.id==='main');
+  if(!main)serverMedsCount=0;
+  else if(!main.metadata.hasPendingWrites){
+   try{const v=JSON.parse((main.data()||{}).json||'{}');serverMedsCount=Array.isArray(v.meds)?v.meds.length:0}catch(e){serverMedsCount=null}
+  }
+ }
  return changed;
 }
 function rebuildDb(){
@@ -1135,7 +1152,7 @@ function rebuildDb(){
 }
 function loadActiveStore(){
  if(unsub){unsub();unsub=null}
- docCache={};cloudReady=false;serverSnapshotReady=false;localCacheLoaded=false;db=emptyDb();cart=[];
+ docCache={};cloudReady=false;serverSnapshotReady=false;serverMedsCount=null;localCacheLoaded=false;db=emptyDb();cart=[];
  // Display a local copy immediately if the device is offline.
  try{
   const cached=localStorage.getItem('zeemalOffline_'+fbUser.uid+'_'+activeStoreId);
@@ -1154,7 +1171,14 @@ function loadActiveStore(){
   if(!snap.metadata.fromCache&&(!snap.metadata.hasPendingWrites||changed))rebuildDb();
   else if(!localCacheLoaded&&changed)rebuildDb();
   if(!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&fbUser){
-   try{localStorage.setItem('zeemalOffline_'+fbUser.uid+'_'+activeStoreId,JSON.stringify(db))}catch(e){console.warn('Offline snapshot cache unavailable',e)}
+   try{
+    const confirmed=JSON.stringify(db);
+    localStorage.setItem('zeemalOffline_'+fbUser.uid+'_'+activeStoreId,confirmed);
+    const backupKey='zeemalConfirmed_'+fbUser.uid+'_'+activeStoreId;
+    const previous=localStorage.getItem(backupKey);
+    if(previous)localStorage.setItem(backupKey+'_previous',previous);
+    localStorage.setItem(backupKey,confirmed);
+   }catch(e){console.warn('Confirmed recovery copy unavailable',e)}
   }
   render();
   if(snap.metadata.fromCache)setSync(navigator.onLine===false?'Offline copy':'Loading…',navigator.onLine===false?'warn':'');
@@ -1189,7 +1213,7 @@ function switchStore(storeId){
 }
 function stopCloud(){
  if(unsub){unsub();unsub=null}
- fbUser=null;accountAccess=null;docCache={};cloudReady=false;serverSnapshotReady=false;db=emptyDb();cart=[];
+ fbUser=null;accountAccess=null;docCache={};cloudReady=false;serverSnapshotReady=false;serverMedsCount=null;db=emptyDb();cart=[];
  $('storeSwitchWrap').style.display='none';$('loading').style.display='none';closeSheet('sSettings');
  setSync('Login required','warn');render();showLogin('Log in to your account.');
 }
@@ -1203,7 +1227,7 @@ function initCloud(){
   fbAuth.onAuthStateChanged(u=>{if(u)startCloud(u);else stopCloud()});
  });
  window.addEventListener('offline',()=>{if(fbUser)setSync('Offline (will sync when connected)','warn')});
- window.addEventListener('online',()=>{if(fbUser){setSync('Syncing…');fbDb.waitForPendingWrites().then(()=>setSync('✔ Synced')).catch(()=>{})}});
+ window.addEventListener('online',()=>{if(fbUser){setSync('Checking server connection…','warn');/* The live server snapshot, not an empty pending-write queue, confirms sync. */}});
 }
 function authErr(e){
  const m={'auth/invalid-email':'Enter a valid email address','auth/missing-email':'Enter your email address','auth/missing-password':'Enter your password',
