@@ -344,9 +344,7 @@ jobs:
               },
               "toolsets": {
                 "sevenZip": {
-                  "url": "https://repo.huaweicloud.com/electron-builder-binaries/7zip@1.0.0/7zip-win-x64.tar.gz",
-                  "checksum": "db50b64348d9560b875a00bd7e02f02b5f7f4b54ff5efa5908c38858c89c9f33",
-                  "version": "1.0.0"
+                  "url": "file:///__LOCAL_7ZIP_PATH__"
                 }
               }
             }
@@ -366,6 +364,40 @@ jobs:
           p.write_text(s,encoding='utf-8')
           PY
           ls -R winapp
+
+      - name: Prepare and verify local 7-Zip toolset
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $source = "C:\Program Files\7-Zip"
+          $sevenZipDir = Join-Path $env:GITHUB_WORKSPACE "winapp\tools\7zip"
+          $binDir = Join-Path $sevenZipDir "bin"
+          if (!(Test-Path (Join-Path $source "7z.exe")) -or !(Test-Path (Join-Path $source "7z.dll"))) {
+            throw "Runner's installed 7-Zip files are missing from $source"
+          }
+          New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+          Copy-Item (Join-Path $source "7z.exe") (Join-Path $binDir "7za.exe") -Force
+          Copy-Item (Join-Path $source "7z.dll") $binDir -Force
+
+          Write-Host "Checking local 7-Zip command..."
+          & (Join-Path $binDir "7za.exe") i
+          if ($LASTEXITCODE -ne 0) { throw "7za.exe i failed." }
+
+          Set-Content -Path (Join-Path $sevenZipDir "sample.txt") -Value "local 7-Zip verification"
+          & (Join-Path $binDir "7za.exe") a (Join-Path $sevenZipDir "test.7z") (Join-Path $sevenZipDir "sample.txt")
+          if ($LASTEXITCODE -ne 0) { throw "7za.exe archive test failed." }
+          if (!(Test-Path (Join-Path $sevenZipDir "test.7z"))) { throw "7-Zip test archive was not created." }
+          Write-Host "LOCAL 7-ZIP TEST PASSED: 7za.exe info + archive creation."
+
+          # electron-builder accepts a bare local directory URL without a checksum.
+          $packagePath = Join-Path $env:GITHUB_WORKSPACE "winapp\package.json"
+          $package = Get-Content $packagePath -Raw | ConvertFrom-Json
+          $urlPath = $sevenZipDir.Replace("\", "/")
+          $package.build.toolsets.sevenZip = @{ url = "file:///$urlPath" }
+          $package | ConvertTo-Json -Depth 30 | Set-Content -Path $packagePath -Encoding utf8
+          $updated = Get-Content $packagePath -Raw | ConvertFrom-Json
+          Write-Host "Configured local toolset URL: $($updated.build.toolsets.sevenZip.url)"
+          if ($updated.build.toolsets.sevenZip.url -notmatch "^file:///") { throw "Local 7-Zip URL is malformed." }
 
       - name: Cache Windows Electron downloads
         uses: actions/cache@v4
