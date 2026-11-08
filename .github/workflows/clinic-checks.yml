@@ -2,7 +2,7 @@ name: Clinic Static Checks
 
 on:
   push:
-    branches: [main, hardening/store1-store2-data-safety]
+    branches: [main, hardening/store1-store2-data-safety, diag/sync-debug]
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -49,6 +49,10 @@ jobs:
           for required in ["serverMedsCount", "Inventory safety lock", "zeemalConfirmed_", "Checking server connection", "Offline mode: records are view-only", "loadActiveStore();/* Re-read the complete server snapshot", "onSnapshot({includeMetadataChanges:true}"]:
               assert required in html, "missing data safety guard: " + required
           print("inventory safety checks OK")
+          debug_need = ["SYNC_DEBUG=", "firebase.firestore.setLogLevel('debug')", "App Check activate called", "getToken(false)", "still waiting", "onAuthStateChanged fired", "Firestore listener started", "first cache snapshot", "first server snapshot", "Firestore listener error", "browser online event", "browser offline event", "https://firestore.googleapis.com/", "https://www.google.com/recaptcha/enterprise.js", "https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js", "AbortController", "zeemalSyncDebug", "Sync diagnostics", "clipboard.writeText"]
+          missing_debug = [n for n in debug_need if n not in html]
+          assert not missing_debug, "missing opt-in sync diagnostics: " + str(missing_debug)
+          print("opt-in sync diagnostics checks OK")
           print("scanner checks OK")
           PY
       - name: Check service worker syntax
