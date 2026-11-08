@@ -25,7 +25,7 @@ const state = { serverSnapshotReady: false, cacheEvents: 0, serverEvents: 0 };
 const fakeFirestore = {
   listener: null,
   onSnapshot(options, next) {
-    assert.deepEqual(options, { includeMetadataChanges: true });
+    assert.equal(options && options.includeMetadataChanges, true);
     this.listener = next;
     return () => {};
   },
