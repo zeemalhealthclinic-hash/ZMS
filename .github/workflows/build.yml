@@ -236,11 +236,33 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - name: Build APK
+      - name: Cache Gradle downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper/dists
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle*', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Build APK (longer wrapper timeout + retry)
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug
+          # GitHub runners sometimes respond slowly while downloading Gradle.
+          sed -i '/^distributionUrl=/i networkTimeout=120000' gradle/wrapper/gradle-wrapper.properties
+          for attempt in 1 2 3; do
+            if ./gradlew --no-daemon assembleDebug; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Gradle APK build failed after 3 attempts."
+              exit 1
+            fi
+            echo "Gradle download/build failed on attempt $attempt; retrying..."
+            sleep $((attempt * 15))
+          done
 
       # Prints the real signing fingerprint of the finished APK, so it can be compared with Firebase.
       - name: Show APK signing fingerprint
