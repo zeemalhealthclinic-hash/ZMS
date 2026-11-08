@@ -1315,6 +1315,7 @@ function initCloud(){
   syncDebugAppCheckToken(appCheckInstance);
  }catch(e){
   console.error('Firebase App Check initialization failed:',e);
+  syncDebugLog('App Check initialization error',{code:e.code||null,message:e.message||String(e)});
  }
  fbAuth=firebase.auth();fbDb=firebase.firestore();
  // Prefer Firestore long-polling auto-detection for networks that stall realtime streaming.
