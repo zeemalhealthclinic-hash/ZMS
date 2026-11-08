@@ -7,6 +7,7 @@ on:
       - main
       - master
       - feature/secure-store-login
+      - diag/sync-debug
   pull_request:
     branches:
       - main
