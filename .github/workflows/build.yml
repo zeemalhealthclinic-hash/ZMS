@@ -152,7 +152,7 @@ jobs:
               raise SystemExit("Generated MainActivity.java was not found at expected package path.")
           source = main.read_text(encoding="utf-8")
           if "registerPlugin(BackupDownloadPlugin.class)" not in source:
-              match = re.search(r"(public\\s+class\\s+MainActivity\\s+extends\\s+BridgeActivity\\s*\\{)", source)
+              match = re.search(r"(public\s+class\s+MainActivity\s+extends\s+BridgeActivity\s*\{)", source)
               if not match:
                   raise SystemExit("Could not safely locate MainActivity class declaration.")
               method = """
