@@ -297,14 +297,13 @@ jobs:
       - name: Prepare Windows app folder
         shell: bash
         run: |
-          mkdir -p winapp/electron winapp/build
+          mkdir -p winapp/electron
           cp electron/main.js winapp/electron/main.js
           cp electron/preload.js winapp/electron/preload.js
           cp index.html winapp/index.html
           for f in sw.js manifest.json zeemal-health-clinic-logo.png zeemal-health-clinic-logo.svg; do
             if [ -f "$f" ]; then cp "$f" "winapp/$f"; fi
           done
-          if [ -f zeemal-health-clinic-logo.png ]; then cp zeemal-health-clinic-logo.png winapp/build/icon.png; fi
           cat > winapp/package.json <<'EOF'
           {
             "name": "zeemal-health-clinic",
@@ -331,7 +330,6 @@ jobs:
               ],
               "win": {
                 "target": ["nsis", "portable"],
-                "icon": "build/icon.png",
                 "signAndEditExecutable": false
               },
               "nsis": {
