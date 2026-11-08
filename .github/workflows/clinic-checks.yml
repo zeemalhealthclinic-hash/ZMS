@@ -46,7 +46,7 @@ jobs:
           for bad in ["decodeFromVideoDevice", "decodeFromCanvas", "BrowserMultiFormatReader"]:
               assert bad not in html, "banned: " + bad
           assert "zeemal-clinic-v13" in sw, "sw cache version mismatch"
-          for required in ["serverMedsCount", "Inventory safety lock", "zeemalConfirmed_", "Checking server connection", "Offline mode: records are view-only", "loadActiveStore();/* Re-read the complete server snapshot"]:
+          for required in ["serverMedsCount", "Inventory safety lock", "zeemalConfirmed_", "Checking server connection", "Offline mode: records are view-only", "loadActiveStore();/* Re-read the complete server snapshot", "onSnapshot({includeMetadataChanges:true}"]:
               assert required in html, "missing data safety guard: " + required
           print("inventory safety checks OK")
           print("scanner checks OK")

@@ -1086,6 +1086,7 @@ const ACCOUNT_ACCESS={
 let fbAuth=null,fbDb=null,fbUser=null,unsub=null,docCache={},cloudReady=false,serverSnapshotReady=false,localCacheLoaded=false,syncTxt='',activeStoreId='store1',accountAccess=null;
 // Last complete server-confirmed inventory size; used to stop accidental mass deletion uploads.
 let serverMedsCount=null;
+let syncSlowTimer=null;
 function setSync(t,cls){syncTxt=t;const p=$('syncPill');p.className='pill '+(cls||'');p.textContent=(fbUser?(accountAccess&&accountAccess.role==='admin'?'Admin · ':'Store · '):'')+t}
 function showLogin(t){$('loginInfo').textContent=t;$('login').style.display='flex'}
 function buildDocs(){
@@ -1153,6 +1154,7 @@ function rebuildDb(){
 }
 function loadActiveStore(){
  if(unsub){unsub();unsub=null}
+ if(syncSlowTimer){clearTimeout(syncSlowTimer);syncSlowTimer=null}
  docCache={};cloudReady=false;serverSnapshotReady=false;serverMedsCount=null;localCacheLoaded=false;db=emptyDb();cart=[];
  // Display a local copy immediately if the device is offline.
  try{
@@ -1161,15 +1163,27 @@ function loadActiveStore(){
  }catch(e){console.warn('Offline data cache could not be loaded',e)}
  $('loading').style.display=cloudReady?'none':'flex';
  setSync(navigator.onLine===false&&cloudReady?'Offline · local data available':'Loading '+(activeStoreId==='store1'?'Store 1':'Store 2')+'…',navigator.onLine===false?'warn':'');render();
- unsub=fbDb.collection('stores').doc(activeStoreId).collection('data').onSnapshot(snap=>{
+ const t0=performance.now();let firstCacheMs=null,firstServerMs=null;
+ syncSlowTimer=setTimeout(()=>{
+  if(fbUser&&!serverSnapshotReady){
+   console.warn('[sync] No server snapshot after 10s',{store:activeStoreId,online:navigator.onLine,firstCacheSnapshotMs:firstCacheMs});
+   if(navigator.onLine!==false)setSync('Server is slow — still connecting…','warn');
+  }
+ },10000);
+ unsub=fbDb.collection('stores').doc(activeStoreId).collection('data').onSnapshot({includeMetadataChanges:true},snap=>{
+  const wasServerReady=serverSnapshotReady;
   const changed=applySnapshot(snap);
-  if(!snap.metadata.fromCache)serverSnapshotReady=true;
+  if(snap.metadata.fromCache&&firstCacheMs===null){firstCacheMs=Math.round(performance.now()-t0);console.info('[sync] first cache snapshot',{store:activeStoreId,ms:firstCacheMs,docs:snap.size})}
+  if(!snap.metadata.fromCache){
+   serverSnapshotReady=true;
+   if(firstServerMs===null){firstServerMs=Math.round(performance.now()-t0);console.info('[sync] first server snapshot',{store:activeStoreId,ms:firstServerMs,docs:snap.size});if(syncSlowTimer){clearTimeout(syncSlowTimer);syncSlowTimer=null}}
+  }
   if(!cloudReady&&(!snap.metadata.fromCache||!snap.empty||navigator.onLine===false)){
    cloudReady=true;$('loading').style.display='none';
   }
   // Rebuild on the first clean server snapshot too (including an empty store), so stale local data cannot override cloud data.
   // A Firestore cache snapshot can be incomplete. Keep the full local backup until a server snapshot confirms the complete collection.
-  if(!snap.metadata.fromCache&&(!snap.metadata.hasPendingWrites||changed))rebuildDb();
+  if(!snap.metadata.fromCache&&((!snap.metadata.hasPendingWrites&&(changed||!wasServerReady))||changed))rebuildDb();
   else if(!localCacheLoaded&&changed)rebuildDb();
   if(!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites&&fbUser){
    try{
@@ -1182,7 +1196,7 @@ function loadActiveStore(){
    }catch(e){console.warn('Confirmed recovery copy unavailable',e)}
   }
   render();
-  if(snap.metadata.fromCache)setSync(navigator.onLine===false?'Offline copy':'Loading…',navigator.onLine===false?'warn':'');
+  if(snap.metadata.fromCache)setSync(navigator.onLine===false?'Offline copy':(localCacheLoaded||cloudReady?'Saved data ready · syncing…':'Loading…'),navigator.onLine===false?'warn':'');
   else if(!snap.metadata.hasPendingWrites)setSync('✔ Synced');
  },err=>{
   // Network errors should never sign the user out or discard the cached view.
@@ -1214,6 +1228,7 @@ function switchStore(storeId){
 }
 function stopCloud(){
  if(unsub){unsub();unsub=null}
+ if(syncSlowTimer){clearTimeout(syncSlowTimer);syncSlowTimer=null}
  fbUser=null;accountAccess=null;docCache={};cloudReady=false;serverSnapshotReady=false;serverMedsCount=null;db=emptyDb();cart=[];
  $('storeSwitchWrap').style.display='none';$('loading').style.display='none';closeSheet('sSettings');
  setSync('Login required','warn');render();showLogin('Log in to your account.');

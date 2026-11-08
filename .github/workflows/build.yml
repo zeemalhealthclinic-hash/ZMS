@@ -7,6 +7,9 @@ on:
       - main
       - master
       - feature/secure-store-login
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
