@@ -1108,7 +1108,7 @@ function initSyncDiagnostics(){
  const probes=['https://firestore.googleapis.com/','https://www.google.com/recaptcha/enterprise.js'];
  probes.forEach(url=>{const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),8000);const started=performance.now();fetch(url,{mode:'no-cors',cache:'no-store',signal:controller.signal}).then(()=>syncDiag('Reachability probe completed',{url,ms:Math.round(performance.now()-started),result:'fetch-resolved (opaque response may be expected)'})).catch(e=>syncDiag('Reachability probe failed',{url,ms:Math.round(performance.now()-started),error:e.name||e.message})).finally(()=>clearTimeout(timer))});
 }
-function markServerSnapshot(snap){if(snap&&snap.metadata&&!snap.metadata.fromCache){serverSnapshotReady=true;return true}return false}
+function markServerSnapshot(snap){if(snap&&snap.metadata&&snap.metadata.fromCache===false){serverSnapshotReady=true;return true}return false}
 function setSync(t,cls){syncTxt=t;const p=$('syncPill');p.className='pill '+(cls||'');p.textContent=(fbUser?(accountAccess&&accountAccess.role==='admin'?'Admin · ':'Store · '):'')+t}
 function showLogin(t){$('loginInfo').textContent=t;$('login').style.display='flex'}
 function buildDocs(){
