@@ -999,21 +999,26 @@ function openBackup(){
  openSheet('sBackup');
 }
 async function bkDownload(){
- const text=$('bkText').value||makeBackupText();
- if(!text||text.length<20)return message('Backup is empty. Please wait for data to finish loading.');
+ const backupText=$('bkText').value||makeBackupText();
+ if(!backupText||backupText.length<20)return message('Backup is empty. Please wait for data to finish loading.');
  const filename='zeemal-health-clinic-backup-'+ymd(new Date())+'.json';
- const blob=new Blob([text],{type:'application/json;charset=utf-8'});
- const file=new File([blob],filename,{type:'application/json'});
- // On supported phones, offer the native share/save sheet for the JSON file.
- try{
-  if(navigator.share&&navigator.canShare&&navigator.canShare({files:[file]})){
-   await navigator.share({files:[file],title:'Zeemal Health Clinic Backup'});
-   $('bkStatus').textContent='Backup file shared. Save it to your device or cloud storage.';
-   return;
+ const blob=new Blob([backupText],{type:'application/json;charset=utf-8'});
+ const cap=window.Capacitor;
+ const isNative=!!(cap&&typeof cap.isNativePlatform==='function'&&cap.isNativePlatform());
+ if(isNative){
+  try{
+   const nativePlugin=cap.Plugins&&cap.Plugins.BackupDownload;
+   if(!nativePlugin||typeof nativePlugin.save!=='function')throw new Error('Android backup saver is unavailable. Please install the latest APK.');
+   const saved=await nativePlugin.save({fileName:filename,content:backupText});
+   if(!saved||!saved.uri)throw new Error('Android did not confirm that the backup file was saved.');
+   $('bkStatus').textContent='Backup saved to Downloads: '+filename;
+   message('Backup saved successfully in your Downloads folder.');
+  }catch(e){
+   console.error('Android backup save failed:',e);
+   $('bkStatus').textContent='Backup was NOT saved. '+(e&&e.message?e.message:'Please try again.');
+   message('Backup download failed. No success was reported.');
   }
- }catch(e){
-  if(e&&e.name==='AbortError')return;
-  console.warn('Native file sharing unavailable; trying browser download',e);
+  return;
  }
  try{
   const url=URL.createObjectURL(blob),a=document.createElement('a');

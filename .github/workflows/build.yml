@@ -75,6 +75,100 @@ jobs:
       - name: Create Android project
         run: npx cap add android
 
+      - name: Add native Android Downloads backup saver
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          java_dir = Path("android/app/src/main/java/com/zeemal/healthclinic")
+          java_dir.mkdir(parents=True, exist_ok=True)
+          plugin = java_dir / "BackupDownloadPlugin.java"
+          plugin.write_text("""package com.zeemal.healthclinic;
+
+          import android.content.ContentValues;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Environment;
+          import android.provider.MediaStore;
+          import com.getcapacitor.JSObject;
+          import com.getcapacitor.Plugin;
+          import com.getcapacitor.PluginCall;
+          import com.getcapacitor.PluginMethod;
+          import com.getcapacitor.annotation.CapacitorPlugin;
+          import java.io.OutputStream;
+          import java.nio.charset.StandardCharsets;
+
+          @CapacitorPlugin(name = "BackupDownload")
+          public class BackupDownloadPlugin extends Plugin {
+              @PluginMethod
+              public void save(PluginCall call) {
+                  String fileName = call.getString("fileName");
+                  String content = call.getString("content");
+                  if (fileName == null || content == null || content.isEmpty()) {
+                      call.reject("Backup filename or content is empty.");
+                      return;
+                  }
+                  if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                      call.reject("Saving directly to Downloads requires Android 10 or newer.");
+                      return;
+                  }
+                  String safeName = fileName.replaceAll("[^A-Za-z0-9._-]", "_");
+                  if (!safeName.toLowerCase().endsWith(".json")) safeName += ".json";
+                  ContentValues values = new ContentValues();
+                  values.put(MediaStore.Downloads.DISPLAY_NAME, safeName);
+                  values.put(MediaStore.Downloads.MIME_TYPE, "application/json");
+                  values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Zeemal Health Clinic");
+                  values.put(MediaStore.Downloads.IS_PENDING, 1);
+                  Uri uri = null;
+                  try {
+                      uri = getContext().getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+                      if (uri == null) throw new IllegalStateException("Android could not create the backup file.");
+                      try (OutputStream output = getContext().getContentResolver().openOutputStream(uri, "w")) {
+                          if (output == null) throw new IllegalStateException("Android could not open the backup file.");
+                          output.write(content.getBytes(StandardCharsets.UTF_8));
+                          output.flush();
+                      }
+                      ContentValues ready = new ContentValues();
+                      ready.put(MediaStore.Downloads.IS_PENDING, 0);
+                      int updated = getContext().getContentResolver().update(uri, ready, null, null);
+                      if (updated <= 0) throw new IllegalStateException("Android could not finalize the backup file.");
+                      JSObject result = new JSObject();
+                      result.put("fileName", safeName);
+                      result.put("uri", uri.toString());
+                      call.resolve(result);
+                  } catch (Exception error) {
+                      if (uri != null) {
+                          try { getContext().getContentResolver().delete(uri, null, null); } catch (Exception ignored) {}
+                      }
+                      call.reject("Could not save backup to Downloads: " + error.getMessage(), error);
+                  }
+              }
+          }
+          """, encoding="utf-8")
+
+          main = java_dir / "MainActivity.java"
+          if not main.exists():
+              raise SystemExit("Generated MainActivity.java was not found at expected package path.")
+          source = main.read_text(encoding="utf-8")
+          if "registerPlugin(BackupDownloadPlugin.class)" not in source:
+              match = re.search(r"(public\s+class\s+MainActivity\s+extends\s+BridgeActivity\s*\{)", source)
+              if not match:
+                  raise SystemExit("Could not safely locate MainActivity class declaration.")
+              method = """
+              @Override
+              public void onCreate(android.os.Bundle savedInstanceState) {
+                  registerPlugin(BackupDownloadPlugin.class);
+                  super.onCreate(savedInstanceState);
+              }
+          """
+              source = source.replace(match.group(1), match.group(1) + method, 1)
+              main.write_text(source, encoding="utf-8")
+          print("Native BackupDownload plugin generated and registered.")
+          PY
+          grep -n "BackupDownloadPlugin" android/app/src/main/java/com/zeemal/healthclinic/MainActivity.java
+          test -s android/app/src/main/java/com/zeemal/healthclinic/BackupDownloadPlugin.java
+
       - name: Generate Zeemal Android launcher icon
         run: |
           mkdir -p assets
