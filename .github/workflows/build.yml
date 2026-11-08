@@ -331,7 +331,8 @@ jobs:
               ],
               "win": {
                 "target": ["nsis", "portable"],
-                "icon": "build/icon.png"
+                "icon": "build/icon.png",
+                "signAndEditExecutable": false
               },
               "nsis": {
                 "oneClick": false,
