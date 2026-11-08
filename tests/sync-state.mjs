@@ -61,7 +61,8 @@ vm.runInContext(`
 // Initial cache event must NOT unlock writes.
 fakeFirestore.emit({ metadata: { fromCache: true }, docChanges: () => [] });
 assert.equal(vm.runInContext('serverSnapshotReady', context), false);
-assert.equal(vm.runInContext('canWrite()', context), false);
+vm.runInContext('cloudReady = true', context);
+assert.equal(vm.runInContext('canWrite()', context), false, 'canWrite must remain locked until serverSnapshotReady');
 vm.runInContext('cloudReady = true; fbDb = {collection(){ uploads++; return {doc(){return {collection(){return {doc(){return {set(){uploads++}}}}}}}}}}; cloudPush();', context);
 assert.equal(vm.runInContext('uploads', context), 0, 'cloudPush uploaded before a server snapshot');
 
