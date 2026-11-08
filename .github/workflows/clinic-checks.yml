@@ -51,5 +51,23 @@ jobs:
           print("inventory safety checks OK")
           print("scanner checks OK")
           PY
+      - name: Check Firestore sync safeguards and state machine
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          html = Path("index.html").read_text(encoding="utf-8")
+          assert "onSnapshot({includeMetadataChanges:true}" in html, "metadata-only snapshots must be observed"
+          assert "enablePersistence({synchronizeTabs:false})" in html, "single-tab persistence mode missing"
+          assert "fbDb.disableNetwork()" in html and "fbDb.enableNetwork()" in html, "one-time network reset missing"
+          assert "Server slow — close other Zeemal tabs and refresh" in html, "10-second warning missing"
+          can_write = html.split("function canWrite(){", 1)[1].split("\n", 1)[0]
+          cloud_push = html.split("function cloudPush(){", 1)[1].split("function applySnapshot", 1)[0]
+          assert "serverSnapshotReady" in can_write, "canWrite server snapshot guard missing"
+          assert "if(!serverSnapshotReady)" in cloud_push, "cloudPush server snapshot guard missing"
+          assert "Number.isInteger(serverMedsCount)" in cloud_push and "Math.ceil(serverMedsCount*0.5)" in cloud_push, "inventory safety lock missing"
+          assert "function markServerSnapshot(snap)" in html, "server-only readiness helper missing"
+          print("Firestore sync safety guards OK")
+          PY
+          node tests/sync-state.mjs
       - name: Check service worker syntax
         run: node --check sw.js
