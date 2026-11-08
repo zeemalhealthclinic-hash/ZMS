@@ -341,6 +341,13 @@ jobs:
               },
               "portable": {
                 "artifactName": "Zeemal-Health-Clinic-Portable-${version}.${ext}"
+              },
+              "toolsets": {
+                "sevenZip": {
+                  "url": "https://repo.huaweicloud.com/electron-builder-binaries/7zip@1.0.0/7zip-win-x64.tar.gz",
+                  "checksum": "db50b64348d9560b875a00bd7e02f02b5f7f4b54ff5efa5908c38858c89c9f33",
+                  "version": "1.0.0"
+                }
               }
             }
           }
