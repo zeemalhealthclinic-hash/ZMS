@@ -342,11 +342,6 @@ jobs:
               "portable": {
                 "artifactName": "Zeemal-Health-Clinic-Portable-${version}.${ext}"
               },
-              "toolsets": {
-                "sevenZip": {
-                  "url": "file:///__LOCAL_7ZIP_PATH__"
-                }
-              }
             }
           }
           EOF
