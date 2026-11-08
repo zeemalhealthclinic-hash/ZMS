@@ -1197,7 +1197,7 @@ function loadActiveStore(){
  syncResetTimer=setTimeout(()=>{
   if(fbUser&&!serverSnapshotReady&&navigator.onLine!==false&&!syncResetAttempted){
    syncResetAttempted=true;syncDiag('One-time Firestore stream reset started',{store:activeStoreId});
-   Promise.resolve().then(()=>fbDb.disableNetwork()).then(()=>fbDb.enableNetwork()).then(()=>syncDiag('One-time Firestore stream reset completed',{store:activeStoreId})).catch(e=>{console.warn('[sync] One-time network reset failed:',e.code||e.message);syncDiag('One-time Firestore stream reset failed',{code:e.code||'',message:e.message||''})});
+   fbDb.disableNetwork().then(()=>fbDb.enableNetwork()).then(()=>syncDiag('One-time Firestore stream reset completed',{store:activeStoreId})).catch(e=>{console.warn('[sync] One-time network reset failed:',e.code||e.message);syncDiag('One-time Firestore stream reset failed',{code:e.code||'',message:e.message||''})});
   }
  },20000);
  unsub=fbDb.collection('stores').doc(activeStoreId).collection('data').onSnapshot({includeMetadataChanges:true},snap=>{
