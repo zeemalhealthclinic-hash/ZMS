@@ -38,6 +38,7 @@ const context = vm.createContext({
   setSync() {},
 });
 vm.runInContext(`
+  const CLOUD = true;
   let serverSnapshotReady = false;
   let cloudReady = false;
   let fbUser = { uid: 'test-user' };
@@ -50,7 +51,7 @@ vm.runInContext(`
   const firebase = { firestore: { FieldValue: { serverTimestamp: () => 'server-time' } } };
   function buildDocs(){ return { main: JSON.stringify({meds:db.meds,customers:db.customers,settings:{}}) }; }
 `, context);
-vm.runInContext(readinessCode + '\\n' + canWriteCode + '\\n' + cloudPushCode, context);
+vm.runInContext(readinessCode + '\n' + canWriteCode + '\n' + cloudPushCode, context);
 context.fakeFirestore = fakeFirestore;
 vm.runInContext(`
   const fakeListener = { onSnapshot: fakeFirestore.onSnapshot.bind(fakeFirestore) };
