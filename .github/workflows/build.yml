@@ -28,8 +28,22 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install dependencies
-        run: npm install --no-audit --no-fund
+      - name: Install dependencies (retry transient downloads)
+        env:
+          npm_config_sharp_binary_host: https://npmmirror.com/mirrors/sharp
+          npm_config_sharp_libvips_binary_host: https://npmmirror.com/mirrors/sharp-libvips
+        run: |
+          for attempt in 1 2 3; do
+            if npm install --no-audit --no-fund; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Dependency installation failed after 3 attempts."
+              exit 1
+            fi
+            echo "Dependency download failed on attempt $attempt; retrying..."
+            sleep $((attempt * 10))
+          done
 
       - name: Prepare bundled app files for offline-first Android
         run: |
@@ -222,11 +236,33 @@ jobs:
           distribution: temurin
           java-version: 21
 
-      - name: Build APK
+      - name: Cache Gradle downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper/dists
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle*', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
+
+      - name: Build APK (longer wrapper timeout + retry)
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug
+          # GitHub runners sometimes respond slowly while downloading Gradle.
+          sed -i '/^distributionUrl=/i networkTimeout=120000' gradle/wrapper/gradle-wrapper.properties
+          for attempt in 1 2 3; do
+            if ./gradlew --no-daemon assembleDebug; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::Gradle APK build failed after 3 attempts."
+              exit 1
+            fi
+            echo "Gradle download/build failed on attempt $attempt; retrying..."
+            sleep $((attempt * 15))
+          done
 
       # Prints the real signing fingerprint of the finished APK, so it can be compared with Firebase.
       - name: Show APK signing fingerprint
@@ -261,14 +297,13 @@ jobs:
       - name: Prepare Windows app folder
         shell: bash
         run: |
-          mkdir -p winapp/electron winapp/build
+          mkdir -p winapp/electron
           cp electron/main.js winapp/electron/main.js
           cp electron/preload.js winapp/electron/preload.js
           cp index.html winapp/index.html
           for f in sw.js manifest.json zeemal-health-clinic-logo.png zeemal-health-clinic-logo.svg; do
             if [ -f "$f" ]; then cp "$f" "winapp/$f"; fi
           done
-          if [ -f zeemal-health-clinic-logo.png ]; then cp zeemal-health-clinic-logo.png winapp/build/icon.png; fi
           cat > winapp/package.json <<'EOF'
           {
             "name": "zeemal-health-clinic",
@@ -295,7 +330,7 @@ jobs:
               ],
               "win": {
                 "target": ["nsis", "portable"],
-                "icon": "build/icon.png"
+                "signAndEditExecutable": false
               },
               "nsis": {
                 "oneClick": false,
@@ -325,15 +360,82 @@ jobs:
           PY
           ls -R winapp
 
-      - name: Install Windows build tools
-        working-directory: winapp
-        run: npm install --no-audit --no-fund
+      - name: Prepare and verify local 7-Zip toolset
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $source = "C:\Program Files\7-Zip"
+          $sevenZipDir = Join-Path $env:GITHUB_WORKSPACE "winapp\tools\7zip"
+          $binDir = Join-Path $sevenZipDir "bin"
+          if (!(Test-Path (Join-Path $source "7z.exe")) -or !(Test-Path (Join-Path $source "7z.dll"))) {
+            throw "Runner's installed 7-Zip files are missing from $source"
+          }
+          New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+          Copy-Item (Join-Path $source "7z.exe") (Join-Path $binDir "7za.exe") -Force
+          Copy-Item (Join-Path $source "7z.dll") $binDir -Force
 
-      - name: Build EXE
+          Write-Host "Checking local 7-Zip command..."
+          & (Join-Path $binDir "7za.exe") i
+          if ($LASTEXITCODE -ne 0) { throw "7za.exe i failed." }
+
+          Set-Content -Path (Join-Path $sevenZipDir "sample.txt") -Value "local 7-Zip verification"
+          & (Join-Path $binDir "7za.exe") a (Join-Path $sevenZipDir "test.7z") (Join-Path $sevenZipDir "sample.txt")
+          if ($LASTEXITCODE -ne 0) { throw "7za.exe archive test failed." }
+          if (!(Test-Path (Join-Path $sevenZipDir "test.7z"))) { throw "7-Zip test archive was not created." }
+          Write-Host "LOCAL 7-ZIP TEST PASSED: 7za.exe info + archive creation."
+
+          # electron-builder v26 uses this supported environment override for a local 7za executable.
+          $sevenZipExe = Join-Path $binDir "7za.exe"
+          Add-Content -Path $env:GITHUB_ENV -Value "ELECTRON_BUILDER_7ZIP_PATH=$sevenZipExe"
+          Write-Host "Configured electron-builder v26 local 7-Zip executable: $sevenZipExe"
+          if (!(Test-Path $sevenZipExe)) { throw "Local 7za.exe missing." }
+
+      - name: Cache Windows Electron downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\electron\Cache
+            ~\AppData\Local\electron-builder\Cache
+          key: windows-electron-${{ hashFiles('winapp/package.json') }}
+          restore-keys: |
+            windows-electron-
+
+      - name: Install Windows build tools (mirror + retry)
+        working-directory: winapp
+        env:
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+        run: |
+          $ErrorActionPreference = "Stop"
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            npm install --no-audit --no-fund
+            if ($LASTEXITCODE -eq 0) {
+              exit 0
+            }
+            if ($attempt -eq 3) {
+              throw "Windows dependency installation failed after 3 attempts."
+            }
+            Write-Host "Dependency download failed on attempt $attempt; retrying..."
+            Start-Sleep -Seconds (10 * $attempt)
+          }
+
+      - name: Build EXE (retry transient download failures)
         working-directory: winapp
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: npx electron-builder --win --publish never
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+        run: |
+          $ErrorActionPreference = "Stop"
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            npx electron-builder --win --publish never
+            if ($LASTEXITCODE -eq 0) {
+              exit 0
+            }
+            if ($attempt -eq 3) {
+              throw "Windows EXE packaging failed after 3 attempts."
+            }
+            Write-Host "Electron packaging/download failed on attempt $attempt; retrying..."
+            Start-Sleep -Seconds (15 * $attempt)
+          }
 
       - name: Show build output
         shell: bash
