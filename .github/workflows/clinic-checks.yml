@@ -2,7 +2,7 @@ name: Clinic Static Checks
 
 on:
   push:
-    branches: [main, hardening/store1-store2-data-safety]
+    branches: [main, hardening/store1-store2-data-safety, diag/sync-debug]
   pull_request:
     branches: [main]
   workflow_dispatch:
