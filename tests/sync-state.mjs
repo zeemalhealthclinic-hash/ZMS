@@ -58,7 +58,9 @@ vm.runInContext(`
   fakeListener.onSnapshot({includeMetadataChanges:true}, snap => markServerSnapshot(snap));
 `, context);
 
-// Initial cache event must NOT unlock writes.
+// Missing metadata and cache snapshots must NOT unlock writes.
+fakeFirestore.emit({ metadata: {}, docChanges: () => [] });
+assert.equal(vm.runInContext('serverSnapshotReady', context), false);
 fakeFirestore.emit({ metadata: { fromCache: true }, docChanges: () => [] });
 assert.equal(vm.runInContext('serverSnapshotReady', context), false);
 vm.runInContext('cloudReady = true', context);
