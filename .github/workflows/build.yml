@@ -341,7 +341,7 @@ jobs:
               },
               "portable": {
                 "artifactName": "Zeemal-Health-Clinic-Portable-${version}.${ext}"
-              },
+              }
             }
           }
           EOF
