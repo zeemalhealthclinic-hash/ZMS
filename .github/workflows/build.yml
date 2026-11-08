@@ -32,6 +32,8 @@ jobs:
         env:
           npm_config_sharp_binary_host: https://npmmirror.com/mirrors/sharp
           npm_config_sharp_libvips_binary_host: https://npmmirror.com/mirrors/sharp-libvips
+          # Android does not use Electron; skip its Linux binary download to avoid unrelated GitHub 504 failures.
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         run: |
           for attempt in 1 2 3; do
             if npm install --no-audit --no-fund; then
