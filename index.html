@@ -1234,6 +1234,9 @@ function initCloud(){
   console.error('Firebase App Check initialization failed:',e);
  }
  fbAuth=firebase.auth();fbDb=firebase.firestore();
+ // Prefer Firestore long-polling auto-detection for networks that stall realtime streaming.
+ // This must be configured before persistence, listeners, or any other Firestore operation.
+ try{fbDb.settings({experimentalAutoDetectLongPolling:true});console.info('Firestore long-polling auto-detection enabled.')}catch(e){console.warn('Firestore transport setting unavailable:',e.code||e.message)}
  fbDb.enablePersistence({synchronizeTabs:true}).catch(e=>console.warn('Firestore offline persistence unavailable:',e.code||e.message));
  // Explicitly keep the signed-in account stored on this device across outages/restarts.
  fbAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(e=>console.warn('Auth local persistence unavailable:',e.code||e.message)).finally(()=>{
