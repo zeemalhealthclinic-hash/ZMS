@@ -384,15 +384,11 @@ jobs:
           if (!(Test-Path (Join-Path $sevenZipDir "test.7z"))) { throw "7-Zip test archive was not created." }
           Write-Host "LOCAL 7-ZIP TEST PASSED: 7za.exe info + archive creation."
 
-          # electron-builder accepts a bare local directory URL without a checksum.
-          $packagePath = Join-Path $env:GITHUB_WORKSPACE "winapp\package.json"
-          $package = Get-Content $packagePath -Raw | ConvertFrom-Json
-          $urlPath = $sevenZipDir.Replace("\", "/")
-          $package.build.toolsets.sevenZip = @{ url = "file:///$urlPath" }
-          $package | ConvertTo-Json -Depth 30 | Set-Content -Path $packagePath -Encoding utf8
-          $updated = Get-Content $packagePath -Raw | ConvertFrom-Json
-          Write-Host "Configured local toolset URL: $($updated.build.toolsets.sevenZip.url)"
-          if ($updated.build.toolsets.sevenZip.url -notmatch "^file:///") { throw "Local 7-Zip URL is malformed." }
+          # electron-builder v26 uses this supported environment override for a local 7za executable.
+          $sevenZipExe = Join-Path $binDir "7za.exe"
+          Add-Content -Path $env:GITHUB_ENV -Value "ELECTRON_BUILDER_7ZIP_PATH=$sevenZipExe"
+          Write-Host "Configured electron-builder v26 local 7-Zip executable: $sevenZipExe"
+          if (!(Test-Path $sevenZipExe)) { throw "Local 7za.exe missing." }
 
       - name: Cache Windows Electron downloads
         uses: actions/cache@v4
