@@ -389,11 +389,24 @@ jobs:
             Start-Sleep -Seconds (10 * $attempt)
           }
 
-      - name: Build EXE
+      - name: Build EXE (retry transient download failures)
         working-directory: winapp
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: npx electron-builder --win --publish never
+          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+        run: |
+          $ErrorActionPreference = "Stop"
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            npx electron-builder --win --publish never
+            if ($LASTEXITCODE -eq 0) {
+              exit 0
+            }
+            if ($attempt -eq 3) {
+              throw "Windows EXE packaging failed after 3 attempts."
+            }
+            Write-Host "Electron packaging/download failed on attempt $attempt; retrying..."
+            Start-Sleep -Seconds (15 * $attempt)
+          }
 
       - name: Show build output
         shell: bash
