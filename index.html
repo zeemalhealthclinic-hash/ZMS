@@ -1086,7 +1086,29 @@ const ACCOUNT_ACCESS={
 let fbAuth=null,fbDb=null,fbUser=null,unsub=null,docCache={},cloudReady=false,serverSnapshotReady=false,localCacheLoaded=false,syncTxt='',activeStoreId='store1',accountAccess=null;
 // Last complete server-confirmed inventory size; used to stop accidental mass deletion uploads.
 let serverMedsCount=null;
-let syncSlowTimer=null;
+let syncSlowTimer=null,syncResetTimer=null;
+let syncDebug=false,syncDebugLines=[],syncDebugBox=null;
+try{syncDebug=new URLSearchParams(location.search).get('syncdebug')==='1'||localStorage.getItem('zeemalSyncDebug')==='1'}catch(e){}
+function syncDiag(event,details){
+ if(!syncDebug)return;
+ const line=new Date().toISOString()+' '+event+(details?' '+JSON.stringify(details):'');
+ syncDebugLines.push(line);if(syncDebugLines.length>250)syncDebugLines.shift();
+ console.info('[syncdebug]',line);
+ const out=syncDebugBox&&syncDebugBox.querySelector('pre');if(out)out.textContent=syncDebugLines.join('\\n');
+}
+function initSyncDiagnostics(){
+ if(!syncDebug||syncDebugBox)return;
+ try{firebase.firestore.setLogLevel('debug')}catch(e){syncDiag('Firestore debug log level unavailable',{error:e.message})}
+ const box=document.createElement('details');box.open=true;box.style.cssText='position:fixed;left:8px;right:8px;bottom:calc(100px + env(safe-area-inset-bottom));z-index:95;max-height:42vh;overflow:auto;background:#111827;color:#e5e7eb;border:1px solid #64748b;border-radius:10px;padding:8px;font:11px/1.4 monospace';
+ const summary=document.createElement('summary');summary.textContent='Sync diagnostics (opt-in)';summary.style.cssText='font:600 12px Arial;cursor:pointer;padding:4px';
+ const copy=document.createElement('button');copy.type='button';copy.textContent='Copy';copy.style.cssText='float:right;padding:5px 10px;border:0;border-radius:6px;background:#059669;color:white;font-weight:700';
+ const pre=document.createElement('pre');pre.style.cssText='white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 0';
+ copy.addEventListener('click',async()=>{const value=syncDebugLines.join('\\n');try{if(navigator.clipboard&&navigator.clipboard.writeText)await navigator.clipboard.writeText(value);else throw Error('clipboard unavailable')}catch(e){const ta=document.createElement('textarea');ta.value=value;document.body.appendChild(ta);ta.select();try{document.execCommand('copy')}catch(x){}ta.remove()}});
+ box.append(summary,copy,pre);document.body.appendChild(box);syncDebugBox=box;syncDiag('Diagnostics enabled',{urlOptIn:new URLSearchParams(location.search).get('syncdebug')==='1'});
+ const probes=['https://firestore.googleapis.com/','https://www.google.com/recaptcha/enterprise.js'];
+ probes.forEach(url=>{const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),8000);const started=performance.now();fetch(url,{mode:'no-cors',cache:'no-store',signal:controller.signal}).then(()=>syncDiag('Reachability probe completed',{url,ms:Math.round(performance.now()-started),result:'fetch-resolved (opaque response may be expected)'})).catch(e=>syncDiag('Reachability probe failed',{url,ms:Math.round(performance.now()-started),error:e.name||e.message})).finally(()=>clearTimeout(timer))});
+}
+function markServerSnapshot(snap){if(snap&&snap.metadata&&!snap.metadata.fromCache){serverSnapshotReady=true;return true}return false}
 function setSync(t,cls){syncTxt=t;const p=$('syncPill');p.className='pill '+(cls||'');p.textContent=(fbUser?(accountAccess&&accountAccess.role==='admin'?'Admin · ':'Store · '):'')+t}
 function showLogin(t){$('loginInfo').textContent=t;$('login').style.display='flex'}
 function buildDocs(){
@@ -1155,6 +1177,7 @@ function rebuildDb(){
 function loadActiveStore(){
  if(unsub){unsub();unsub=null}
  if(syncSlowTimer){clearTimeout(syncSlowTimer);syncSlowTimer=null}
+ if(syncResetTimer){clearTimeout(syncResetTimer);syncResetTimer=null}
  docCache={};cloudReady=false;serverSnapshotReady=false;serverMedsCount=null;localCacheLoaded=false;db=emptyDb();cart=[];
  // Display a local copy immediately if the device is offline.
  try{
@@ -1163,20 +1186,27 @@ function loadActiveStore(){
  }catch(e){console.warn('Offline data cache could not be loaded',e)}
  $('loading').style.display=cloudReady?'none':'flex';
  setSync(navigator.onLine===false&&cloudReady?'Offline · local data available':'Loading '+(activeStoreId==='store1'?'Store 1':'Store 2')+'…',navigator.onLine===false?'warn':'');render();
- const t0=performance.now();let firstCacheMs=null,firstServerMs=null;
+ const t0=performance.now();let firstCacheMs=null,firstServerMs=null,syncResetAttempted=false;
+ syncDiag('Listener start',{store:activeStoreId,online:navigator.onLine});
  syncSlowTimer=setTimeout(()=>{
-  if(fbUser&&!serverSnapshotReady){
+  if(fbUser&&!serverSnapshotReady&&navigator.onLine!==false){
    console.warn('[sync] No server snapshot after 10s',{store:activeStoreId,online:navigator.onLine,firstCacheSnapshotMs:firstCacheMs});
-   if(navigator.onLine!==false)setSync('Server is slow — still connecting…','warn');
+   setSync('Server slow — close other Zeemal tabs and refresh','warn');
   }
  },10000);
+ syncResetTimer=setTimeout(()=>{
+  if(fbUser&&!serverSnapshotReady&&navigator.onLine!==false&&!syncResetAttempted){
+   syncResetAttempted=true;syncDiag('One-time Firestore stream reset started',{store:activeStoreId});
+   Promise.resolve().then(()=>fbDb.disableNetwork()).then(()=>fbDb.enableNetwork()).then(()=>syncDiag('One-time Firestore stream reset completed',{store:activeStoreId})).catch(e=>{console.warn('[sync] One-time network reset failed:',e.code||e.message);syncDiag('One-time Firestore stream reset failed',{code:e.code||'',message:e.message||''})});
+  }
+ },20000);
  unsub=fbDb.collection('stores').doc(activeStoreId).collection('data').onSnapshot({includeMetadataChanges:true},snap=>{
   const wasServerReady=serverSnapshotReady;
+  const isServerSnapshot=markServerSnapshot(snap);
   const changed=applySnapshot(snap);
-  if(snap.metadata.fromCache&&firstCacheMs===null){firstCacheMs=Math.round(performance.now()-t0);console.info('[sync] first cache snapshot',{store:activeStoreId,ms:firstCacheMs,docs:snap.size})}
-  if(!snap.metadata.fromCache){
-   serverSnapshotReady=true;
-   if(firstServerMs===null){firstServerMs=Math.round(performance.now()-t0);console.info('[sync] first server snapshot',{store:activeStoreId,ms:firstServerMs,docs:snap.size});if(syncSlowTimer){clearTimeout(syncSlowTimer);syncSlowTimer=null}}
+  if(snap.metadata.fromCache&&firstCacheMs===null){firstCacheMs=Math.round(performance.now()-t0);console.info('[sync] first cache snapshot',{store:activeStoreId,ms:firstCacheMs,docs:snap.size});syncDiag('First cache snapshot',{store:activeStoreId,ms:firstCacheMs,docs:snap.size})}
+  if(isServerSnapshot){
+   if(firstServerMs===null){firstServerMs=Math.round(performance.now()-t0);console.info('[sync] first server snapshot',{store:activeStoreId,ms:firstServerMs,docs:snap.size});syncDiag('First server snapshot',{store:activeStoreId,ms:firstServerMs,docs:snap.size});if(syncSlowTimer){clearTimeout(syncSlowTimer);syncSlowTimer=null}if(syncResetTimer){clearTimeout(syncResetTimer);syncResetTimer=null}}
   }
   if(!cloudReady&&(!snap.metadata.fromCache||!snap.empty||navigator.onLine===false)){
    cloudReady=true;$('loading').style.display='none';
@@ -1199,6 +1229,7 @@ function loadActiveStore(){
   if(snap.metadata.fromCache)setSync(navigator.onLine===false?'Offline copy':(localCacheLoaded||cloudReady?'Saved data ready · syncing…':'Loading…'),navigator.onLine===false?'warn':'');
   else if(!snap.metadata.hasPendingWrites)setSync('✔ Synced');
  },err=>{
+  syncDiag('Listener error callback',{code:err.code||'',message:err.message||''});
   // Network errors should never sign the user out or discard the cached view.
   if(fbUser&&(!navigator.onLine||/unavailable|deadline-exceeded|network/i.test(String(err.code||err.message)))){
    if(localCacheLoaded||db&&(db.meds.length||db.sales.length||db.customers.length||db.payments.length))cloudReady=true;
@@ -1229,6 +1260,7 @@ function switchStore(storeId){
 function stopCloud(){
  if(unsub){unsub();unsub=null}
  if(syncSlowTimer){clearTimeout(syncSlowTimer);syncSlowTimer=null}
+ if(syncResetTimer){clearTimeout(syncResetTimer);syncResetTimer=null}
  fbUser=null;accountAccess=null;docCache={};cloudReady=false;serverSnapshotReady=false;serverMedsCount=null;db=emptyDb();cart=[];
  $('storeSwitchWrap').style.display='none';$('loading').style.display='none';closeSheet('sSettings');
  setSync('Login required','warn');render();showLogin('Log in to your account.');
@@ -1236,6 +1268,7 @@ function stopCloud(){
 function initCloud(){
  if(typeof firebase==='undefined'){showLogin('The login system did not load. Turn on the internet and refresh the page.');return}
  firebase.initializeApp(FIREBASE_CONFIG);
+ initSyncDiagnostics();
  // Firebase App Check: reCAPTCHA Enterprise for this GitHub Pages Web App.
  // Keep this before Auth/Firestore are initialized or used.
  try{
@@ -1245,6 +1278,7 @@ function initCloud(){
    true
   );
   console.info('Firebase App Check initialized.');
+  if(syncDebug){const ac=firebase.appCheck(),started=performance.now();syncDiag('App Check getToken started');ac.getToken(false).then(result=>syncDiag('App Check getToken completed',{ms:Math.round(performance.now()-started),result:result&&result.token?'token received':'no token'})).catch(e=>syncDiag('App Check getToken failed',{ms:Math.round(performance.now()-started),code:e.code||'',message:e.message||''}))}
  }catch(e){
   console.error('Firebase App Check initialization failed:',e);
  }
@@ -1252,13 +1286,13 @@ function initCloud(){
  // Prefer Firestore long-polling auto-detection for networks that stall realtime streaming.
  // This must be configured before persistence, listeners, or any other Firestore operation.
  try{fbDb.settings({experimentalAutoDetectLongPolling:true});console.info('Firestore long-polling auto-detection enabled.')}catch(e){console.warn('Firestore transport setting unavailable:',e.code||e.message)}
- fbDb.enablePersistence({synchronizeTabs:true}).catch(e=>console.warn('Firestore offline persistence unavailable:',e.code||e.message));
+ fbDb.enablePersistence({synchronizeTabs:false}).then(()=>console.info('[sync] Firestore persistence active (single-tab mode).')).catch(e=>{console.warn('Firestore offline persistence unavailable:',e.code||e.message);if(e.code==='failed-precondition')console.info('[sync] This tab is memory-only; another tab holds the persistence lease.');else if(e.code==='unimplemented')console.info('[sync] This tab is memory-only; browser persistence is unsupported.');else console.info('[sync] This tab is memory-only because persistence could not be enabled.')});
  // Explicitly keep the signed-in account stored on this device across outages/restarts.
  fbAuth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(e=>console.warn('Auth local persistence unavailable:',e.code||e.message)).finally(()=>{
-  fbAuth.onAuthStateChanged(u=>{if(u)startCloud(u);else stopCloud()});
+  fbAuth.onAuthStateChanged(u=>{syncDiag('onAuthStateChanged',{authenticated:!!u});if(u)startCloud(u);else stopCloud()});
  });
- window.addEventListener('offline',()=>{if(fbUser)setSync('Offline (will sync when connected)','warn')});
- window.addEventListener('online',()=>{if(fbUser){serverSnapshotReady=false;setSync('Checking server connection…','warn');loadActiveStore();/* Re-read the complete server snapshot before allowing edits. */}});
+ window.addEventListener('offline',()=>{syncDiag('Browser offline event');if(fbUser)setSync('Offline (will sync when connected)','warn')});
+ window.addEventListener('online',()=>{syncDiag('Browser online event');if(fbUser){serverSnapshotReady=false;setSync('Checking server connection…','warn');loadActiveStore();/* Re-read the complete server snapshot before allowing edits. */}});
 }
 function authErr(e){
  const m={'auth/invalid-email':'Enter a valid email address','auth/missing-email':'Enter your email address','auth/missing-password':'Enter your password',
